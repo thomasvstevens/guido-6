@@ -84,7 +84,7 @@ make_synthdefs = {
         env = Linen.kr(gate,delay,1,delay,0);
         Out.kr(out,env * lfo)
     }).add;
-    // MIXER (HFP, CHORUS, AMP)
+    // MIXER (HFP, CHORUS, AMP, LIMITER)
     SynthDef.new(\mixer,{|out,in,amp,chorus_level=0,chorus_rate=1,chorus_depth=0,freq_hpf=4|
         var sig;
         // Apply Chorus before HPF
@@ -93,7 +93,8 @@ make_synthdefs = {
             AllpassL.ar(sig,0.05,LFTri.kr(chorus_rate.linexp(0,1,1/8,8),0,0.01*chorus_depth,0.03))!2]);
         // Lag the cutoff frequency to avoid clicks
         sig = HPF.ar(sig, Lag.kr(freq_hpf,0.25));
-        Out.ar(out,amp * sig);
+        // Use a limiter to avoid exceeding audio range (esp. during self-oscillation). Adds 10msec delay.
+        Out.ar(out,Limiter.ar(amp!2 * sig,0.95,0.01));
     }).add;
 };
 
@@ -116,9 +117,6 @@ make_synths = {
     ~notes = Array.fill(~nkeys,{|i| Synth.new(\dco,
             [\out,~bus_dco,\bus_dco_mod,~bus_lfo,\bus_pwm,~bus_pwm_manual,\bus_lfo,~bus_lfo,
             \gate,0], addAction:\addToHead)});
-    ~free_indices = Array.series(~nkeys);
-    ~num_note_dict = Dictionary(~nkeys);
-    ~num_index_dict = Dictionary(~nkeys);
     // Start LFO in Auto mode
     ~lfo = Synth.new(\lfo, [\out,~bus_lfo,\gate,0], addAction:\addToHead);
     ~lfo_auto = 1;
@@ -144,26 +142,29 @@ make_playmodes = {
     };
     // POLYPHONIC
     ~mode_poly = {
+        var free_indices = Array.series(~nkeys);
+        var num_note_dict = Dictionary(~nkeys);
+        var num_index_dict = Dictionary(~nkeys);
         // NoteOn/NoteOff. Dict maps notenum to synth and array index. Indices are dequeued by noteon, enqueued by noteoff
         ~noteon = MIDIFunc.noteOn({|vel, num|
             var note, index;
-            if(~free_indices.size>0,{
-                index = ~free_indices.removeAt(0);
-                ~num_index_dict.put(num,index);
+            if(free_indices.size>0,{
+                index = free_indices.removeAt(0);
+                num_index_dict.put(num,index);
                 note = ~notes[index];
-                ~num_note_dict.put(num,note);
+                num_note_dict.put(num,note);
                 note.set(\freq,num.midicps,\gate,1);
                 if(~lfo_auto==1,{~lfo.set(\gate,1)});
             });
         });
         ~noteoff = MIDIFunc.noteOff({|vel, num|
             var note;
-            if(~num_note_dict.at(num)!=nil,{
-                note = ~num_note_dict.removeAt(num);
-                ~free_indices = ~free_indices.add(~num_index_dict.removeAt(num));
+            if(num_note_dict.at(num)!=nil,{
+                note = num_note_dict.removeAt(num);
+                free_indices = free_indices.add(num_index_dict.removeAt(num));
                 note.set(\gate,0);
                 // LFO Auto: if last note released, release LFO
-                if(~lfo_auto==1 && ~num_note_dict.size==0,{~lfo.set(\gate,0)});
+                if(~lfo_auto==1 && num_note_dict.size==0,{~lfo.set(\gate,0)});
             });
         });
     };
@@ -304,15 +305,19 @@ make_gui = {
             ~nkeys.do({|i| ~notes[i].set(\mtranspose,7-p.value)});
         })],
         [nil,make_txt.value.string_("HOLD"), ~hold_button = make_onoff.value.action_({ |b|
-            if(~on_arp==1,{
-                if(b.value==0,{
-                    ~mode_switch.value;
+            if(b.value==0,{
+                ~mode_switch.value;
+                if(~on_arp==1,{
                     ~mode_arp.value;
                 },{
-                    ~noteoff.free;
+                    if(~on_mono==1,{
+                        ~mode_mono.value;
+                    },{
+                        ~mode_poly.value;
+                    });
                 });
             },{
-                b.value_(0);
+                ~noteoff.free;
             });
         })],
         [nil,make_txt.value.string_("ON"), make_onoff.value.action_({ |b|
