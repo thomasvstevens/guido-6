@@ -25,6 +25,8 @@
          Envelope and Effects
 --------------------------------*/
 
+// Parameters from <https://archive.org/stream/roland_JUNO-6_SERVICE_NOTES/JUNO-6_SERVICE_NOTES_djvu.txt>
+
 (
 // FUNCTION DECLARATIONS
 var make_synthdefs,make_synths,make_playmodes,make_gui,main;
@@ -39,11 +41,11 @@ make_synthdefs = {
         on_sqr=0,on_saw=0,on_sub=0,amp_sub=0,amp_noise=0,
         bus_pwm,bus_dco_mod,bus_lfo,detune=0,octave=0,
         on_adsr=0,on_pwm_env=0,
-        env_a=0.015625,env_d=0.25,env_s=0.5,env_r=1,
-        vcf_res=0,vcf_cutoff_manual=20000,vcf_env_mod=0,vcf_lfo_mod=0,vcf_kybd=1,vcf_polarity=1,
+        env_a=0.015,env_d=0.233,env_s=0.5,env_r=1,
+        vcf_res=0,vcf_cutoff_manual=0,vcf_env_mod=0,vcf_lfo_mod=0,vcf_kybd=1,vcf_polarity=1,
         gate=1|
-        var sqr,saw,sub,noise,sig,pwm,env_gate,env_adsr,env,dco_freq,
-        cutoff,lfo_cutoff,env_cutoff;
+        var sqr,saw,sub,noise,sig,pwm_in,pwm,env_gate,env_adsr,env,dco_freq,
+        cutoff_min=4,cutoff_max=20000,cutoff,lfo_cutoff,env_cutoff;
         // Calculate envelopes for availability to controls. Decide gate.
         env_gate = Linen.kr(gate,0.015625,1,0.015625,0);
         env_adsr = EnvGen.kr(Env.adsr(env_a,env_d,env_s,env_r),gate,doneAction:0);
@@ -55,33 +57,35 @@ make_synthdefs = {
         dco_freq = freq * In.kr(bus_dco_mod).linlin(-1,1,(-1).midiratio,1.midiratio);
         dco_freq = [dco_freq * (1-detune), dco_freq * (1+detune)];
         // 0 slider/lfo/env maps to 0.5 pulse width. Full modulation shrinks to silence.
-        pwm = (In.kr(bus_pwm) + (on_pwm_env * env_adsr)).linlin(-1,1,0,1);
+        pwm_in = In.kr(bus_pwm);
+        pwm = (((1-on_pwm_env) * pwm_in) + (on_pwm_env * pwm_in * env_adsr)).linlin(-1,1,0,1);
         sqr = Pulse.ar(dco_freq,pwm,on_sqr*0.25);
         saw = Saw.ar(dco_freq,on_saw*0.25);
         sub = Pulse.ar(freq/2,0.5,on_sub*amp_sub*0.25);
         noise = WhiteNoise.ar(amp_noise*0.25);
         // Mix all sources to stereo
         sig = Mix.ar([sqr,saw,sub!2,noise!2]);
-        // VCF: keyboard maps cutoff between manual slider and note freq.
-        cutoff = vcf_kybd.linexp(0,1,vcf_cutoff_manual,freq);
-        // Env offset: maps between current cutoff and max
-        env_cutoff = env_adsr * (vcf_env_mod * (20000-cutoff));
-        // LFO offset: maps between cutoff freq and max freq, clip at 0
-        lfo_cutoff = (vcf_lfo_mod * (20000-cutoff) * In.kr(bus_lfo)).clip(0,20000);
-        cutoff = (cutoff + (vcf_polarity * env_cutoff) + lfo_cutoff);
-        cutoff = (cutoff * bend_vcf.linlin(0,1,1,bend.midiratio)).clip(1,20000);
+        // VCF: keyboard voltage follower sets fundamental, vcf freq slider sets cutoff freq as a ratio to fundamental
+        cutoff = vcf_kybd.linlin(0,1,cutoff_min,freq) * vcf_cutoff_manual.linexp(0,1,1,(cutoff_max/cutoff_min));
+        // Env offset: specs say 10 octaves max
+        env_cutoff = (env_adsr * vcf_env_mod).linexp(0,1,1,120.midiratio);
+        // LFO offset: specs say 6 octaves max
+        lfo_cutoff = (vcf_lfo_mod * In.kr(bus_lfo)).linexp(-1,1,(-72).midiratio,72.midiratio);
+        cutoff = cutoff * env_cutoff.pow(vcf_polarity) * lfo_cutoff;
+        cutoff = cutoff * bend_vcf.linlin(0,1,1,bend.midiratio);
+        cutoff = cutoff.clip(cutoff_min,cutoff_max);
         sig = MoogFF.ar(sig, cutoff, vcf_res);
         Out.ar(out, env*sig);
     }).add;
     // LFO
-    SynthDef.new(\lfo,{|out,amp,rate,delay,gate=1|
+    SynthDef.new(\lfo,{|out,amp,rate=0.3,delay=1.25,gate=1|
         var lfo,env;
         lfo = LFTri.kr(rate,0,amp);
         env = Linen.kr(gate,delay,1,delay,0);
         Out.kr(out,env * lfo)
     }).add;
     // MIXER (HFP, CHORUS, AMP)
-    SynthDef.new(\mixer,{|out,in,amp,chorus_level=0,chorus_rate=1,chorus_depth=0,freq_hpf=1|
+    SynthDef.new(\mixer,{|out,in,amp,chorus_level=0,chorus_rate=1,chorus_depth=0,freq_hpf=4|
         var sig;
         // Apply Chorus before HPF
         sig = In.ar(in,2);
@@ -106,7 +110,7 @@ make_synths = {
     ~bus_pwm = Bus.control;
     ~bus_pwm_manual = Bus.control.value_(0);
     ~bus_zero = Bus.control.value_(0);
-    ~mixer = Synth.new(\mixer, [\out,~bus_out,\in,~bus_dco,\amp,0.5,\freq_hpf,1]);
+    ~mixer = Synth.new(\mixer, [\out,~bus_out,\in,~bus_dco,\amp,0.5,\freq_hpf,4]);
     // Dynamic Polyphony: limit number of total running synths. This is the 6 in Juno-6?
     ~nkeys = 6;
     ~notes = Array.fill(~nkeys,{|i| Synth.new(\dco,
@@ -116,7 +120,7 @@ make_synths = {
     ~num_note_dict = Dictionary(~nkeys);
     ~num_index_dict = Dictionary(~nkeys);
     // Start LFO in Auto mode
-    ~lfo = Synth.new(\lfo, [\out,~bus_lfo,\rate,0,\delay,1,\gate,0], addAction:\addToHead);
+    ~lfo = Synth.new(\lfo, [\out,~bus_lfo,\gate,0], addAction:\addToHead);
     ~lfo_auto = 1;
     // Bend: +/- 2 semitones
     ~bend = MIDIFunc.bend({|b|
@@ -331,17 +335,20 @@ make_gui = {
         [nil,make_txt.value.string_("RANGE"),PopUpMenu.new.items_(["1","2","3"]).value_(0).action_({ |p|
             ~octaves = p.value + 1;
         })],
-        [nil,make_txt.value.string_("RATE"), make_slider.value(4.explin(1,16,0,1)).action_({ |s|
-            TempoClock.default.tempo_(s.value.linexp(0,1,2,32));
+        // arp rate = [1.5,50] Hz
+        [nil,make_txt.value.string_("RATE"), make_slider.value(0.3).action_({ |s|
+            TempoClock.default.tempo_(s.value.linlin(0,1,1.5,50));
         })],
         //////
         // LFO
         //////
+        // lfo rate = [0.3,20] Hz
         [nil,make_txt.value.string_("RATE"), make_slider.value(0).action_({ |s|
-            ~lfo.set(\rate,s.value*30);
+            ~lfo.set(\rate,s.value.linlin(0,1,0.3,20));
         })],
-        [nil,make_txt.value.string_("DELAY\nTIME"), ~slider_delay = make_slider.value(1/10).action_({ |s|
-            if(~lfo_auto==0,{~lfo.set(\delay,s.value*10)});
+        // delay time = [0,2.5] sec
+        [nil,make_txt.value.string_("DELAY\nTIME"), ~slider_delay = make_slider.value(0.5).action_({ |s|
+            if(~lfo_auto==0,{~lfo.set(\delay,s.value*2.5)});
         })],
         [nil,make_txt.value.string_("TRIG\nMODE"),PopUpMenu.new.items_(["MAN","AUTO"]).value_(1).action_({ |p|
             ~lfo_auto = p.value;
@@ -385,7 +392,7 @@ make_gui = {
                 },{
                     // Use the ADSR envelope generated in the synth
                     ~nkeys.do({|i|
-                        ~notes[i].set(\bus_pwm,~bus_zero).set(\on_pwm_env,1)});
+                        ~notes[i].set(\bus_pwm,~bus_pwm_manual).set(\on_pwm_env,1)});
                 });
             });
         })],
@@ -407,18 +414,19 @@ make_gui = {
         //////
         // HPF
         //////
+        // Cutoff frequencies approaching 40kHz yield (infinite amplitude) errors
         [nil,make_txt.value.string_("FREQ"), make_slider.value(0).action_({ |s|
-            ~mixer.set(\freq_hpf,s.value.linexp(0,1,1,20000));
+            ~mixer.set(\freq_hpf,s.value.linexp(0,1,4,20000));
         })],
         //////
         // VCF
         //////
-        [nil,make_txt.value.string_("FREQ"), make_slider.value(1).action_({ |s|
-            ~nkeys.do({|i| ~notes[i].set(\vcf_cutoff_manual,s.value.linexp(0,1,1,20000))});
+        [nil,make_txt.value.string_("FREQ"), make_slider.value(0).action_({ |s|
+            ~nkeys.do({|i| ~notes[i].set(\vcf_cutoff_manual,s.value)});
         })],
         [nil,make_txt.value.string_("RES"), make_slider.value(0).action_({ |s|
-            // Resonance gain is 0 to 4 scale for MoogFF. At 4, filter seems unstable.
-            ~nkeys.do({|i| ~notes[i].set(\vcf_res,s.value.linlin(0,1,0,4-0.01))});
+            // Resonance gain is 0 to 4 scale for MoogFF. At 4, self-oscillation occurs.
+            ~nkeys.do({|i| ~notes[i].set(\vcf_res,s.value.linlin(0,1,0,4))});
         })],
         [nil,make_txt.value,make_onoff.value.states_([
             ["-",Color.white,Color.black], ["+",Color.black,nil]
@@ -496,19 +504,21 @@ make_gui = {
         ]).action_({ |b|
             ~nkeys.do({|i| ~notes[i].set(\on_adsr,b.value)});
         })],
-        // Attack and Decay: exponential control
-        [nil,make_txt.value.string_("A"), make_slider.value(invert_exp.value(1/64)).action_({ |s|
-            ~nkeys.do({|i| ~notes[i].set(\env_a,shift_linexp.value(s.value))});
+        // A(0)=1ms A(0.5)=1s, A(1)=3s
+        [nil,make_txt.value.string_("A"), make_slider.value(0.01).action_({ |s|
+            ~nkeys.do({|i| ~notes[i].set(\env_a,s.value.lincurve(0.5,1,1,3,0.69415,'nil'))});
         })],
-        [nil,make_txt.value.string_("D"), make_slider.value(1/4).action_({ |s|
-            ~nkeys.do({|i| ~notes[i].set(\env_d,shift_linexp.value(s.value))});
+        // D(0)=2ms D(0.5)=1s, D(1)=12s
+        [nil,make_txt.value.string_("D"), make_slider.value(0.25).action_({ |s|
+            ~nkeys.do({|i| ~notes[i].set(\env_d,s.value.lincurve(0.5,1,1,12,2.3999,'nil'))});
         })],
-        [nil,make_txt.value.string_("S"), make_slider.value(1/2).action_({ |s|
+        // S is a linear mapping from [0,1]
+        [nil,make_txt.value.string_("S"), make_slider.value(0.5).action_({ |s|
             ~nkeys.do({|i| ~notes[i].set(\env_s,s.value)});
         })],
-        // Release: range 0 to 10 seconds
-        [nil,make_txt.value.string_("R"), make_slider.value(1/10).action_({ |s|
-            ~nkeys.do({|i| ~notes[i].set(\env_r,s.value*10)});
+        // R uses the same mapping function as D
+        [nil,make_txt.value.string_("R"), make_slider.value(0.5).action_({ |s|
+            ~nkeys.do({|i| ~notes[i].set(\env_r,s.value.lincurve(0.5,1,1,12,2.3999,'nil'))});
         })],
         // Chorus: guessed at I, II modes
         [nil,make_txt.value.string_("I"), ~chorus_i = make_onoff.value.action_({ |b|
