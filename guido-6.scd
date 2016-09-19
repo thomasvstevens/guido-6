@@ -341,7 +341,7 @@ make_gui = {
             ~octaves = p.value + 1;
         })],
         // arp rate = [1.5,50] Hz
-        [nil,make_txt.value.string_("RATE"), make_slider.value(0.3).action_({ |s|
+        [nil,make_txt.value.string_("RATE"), make_slider.value(0.134).action_({ |s|
             TempoClock.default.tempo_(s.value.linlin(0,1,1.5,50));
         })],
         //////
@@ -493,8 +493,8 @@ make_gui = {
                 });
             });
         })],
-        [nil,make_txt.value.string_("VOLUME"), Knob.new.value_(0.5).action_({ |k|
-            ~mixer.set(\amp,k.value)
+        [nil,make_txt.value.string_("VOLUME"), Knob.new.value_(0.1).action_({ |k|
+            ~mixer.set(\amp,k.value.linlin(0,1,0,5))
         }).maxWidth_(bdim*3)]
     );
     // (add headers)
