@@ -20,16 +20,19 @@
          Monophonic (Portamento)
          Arpeggiator
   4. GUI
-         Main (Arp, LFO, DCO, VCF)
-         Aux Controls
-         Envelope and Effects
+         Elements
+         Layout
+             Main (Arp, LFO, DCO, VCF)
+             Aux Controls
+             Envelope and Effects
+  5. Memory
 --------------------------------*/
 
 // Parameters from <https://archive.org/stream/roland_JUNO-6_SERVICE_NOTES/JUNO-6_SERVICE_NOTES_djvu.txt>
 
 (
 // FUNCTION DECLARATIONS
-var make_synthdefs,make_synths,make_playmodes,make_gui,main;
+var make_synthdefs,make_synths,make_playmodes,make_gui,load_defaults,load_patch,main;
 
 ///////////////
 // 1. SYNTHDEFS
@@ -271,307 +274,393 @@ make_playmodes = {
     ~on_mono = 0;
     TempoClock.default.tempo_(8);
 };
+////////////
+// 5. MEMORY
+////////////
+load_patch = {
+};
 
 /////////
 // 4. GUI
 /////////
 make_gui = {
-    var make_txt, make_header, make_onoff, make_slider, bdim=40, sdim=40,
-    win_main, win_control, win_env,
-    grid_main, grid_control, grid_env,
-    screen_arr, bounds_main, bounds_control, bounds_env, scale=1/3,
-    shift_linexp = {|n| n.linexp(0,1,0.01,1.01)-0.01},
-    invert_exp = {|n| (n+0.01).explin(0.01,1.01,0,1)};
-    // Factory methods for GUI items
-    make_header = {
-        StaticText.new.background_(Color.black).stringColor_(Color.white).align_(\center).font_(Font.new.pointSize_(18));
-     };
-    make_txt = { StaticText.new.string_("").align_(\center).font_(Font.new.pointSize_(14)) };
-    make_onoff = { Button.new.states_([["off",Color.clear,nil],
-        ["on",Color.clear,Color.green]]).value_(0).minHeight_(bdim).maxWidth_(bdim) };
-    make_slider = { |default| Slider.new.value_(default).maxWidth_(sdim) };
-    screen_arr = Window.screenBounds.asArray;
-    bounds_main = (screen_arr.copy.put(1,screen_arr[3]) * [1,1,1,2*scale]).asRect;
-    ///////////////
-    // LAYOUT: MAIN
-    ///////////////
-    grid_main = GridLayout.columns(
+    var make_gui_elements,make_gui_layout,load_defaults,
+    //--- After testing, move these factory functions inside make_gui_elements()
+    make_onoff,make_slider,
+    button_dim=40,slider_dim=40;
+    make_onoff = { Button.new.states_([["off",Color.clear,nil],["on",Color.clear,Color.green]])
+        .minHeight_(button_dim).maxWidth_(button_dim) };
+    make_slider = { Slider.new.maxWidth_(slider_dim) };
+    //---
+    //////////////////
+    // A. GUI Elements
+    //////////////////
+    make_gui_elements = {
+        // Each GUI element is a dictionary value with keys: (element,default_p,p->v,v->p) to minimize variable names.
+        // Parameters are human readable and settable
+        // Value is the element.value, which for sliders is 0-1.
+        // default_p is the default parameter to load on GUI creation.
+        // p_to_v and v_to_p are initially identity mappings.
+        var make_dict;
+        make_dict = { |element, default_p, p_to_v=nil, v_to_p=nil|
+            if(p_to_v.isNil,{p_to_v={|p| p}});
+            if(v_to_p.isNil,{v_to_p={|v| v}});
+            (element:element,default_p:default_p,p_to_v:p_to_v,v_to_p:v_to_p).asDict };
+        postln("Building ~elements...");
+        ~elements = Dictionary();
         //////
         // ARP
         //////
-        [nil,make_txt.value.string_("KEY"), PopUpMenu.new.items_(
-            Array.fill(13,{|i| (7-i).asString}).put(7,"");
-        ).value_(7).action_({ |p|
-            ~nkeys.do({|i| ~notes[i].set(\mtranspose,7-p.value)});
-        })],
-        [nil,make_txt.value.string_("HOLD"), ~hold_button = make_onoff.value.action_({ |b|
-            if(b.value==0,{
-                ~mode_switch.value;
-                if(~on_arp==1,{
-                    ~mode_arp.value;
-                },{
-                    if(~on_mono==1,{
-                        ~mode_mono.value;
+        ~elements.add(\key_transpose -> make_dict.value(
+            element: PopUpMenu.new
+            .items_(
+                Array.fill(13,{|i| (7-i).asString}).put(7,"")
+            )
+            .action_({ |p|
+                ~nkeys.do({|i| ~notes[i].set(\mtranspose,~elements[\key_transpose][\parameter])});
+            }),
+            default_p:0,
+            p_to_v:{|p| 7-p},
+            v_to_p:{|v| 7-v}
+        ))
+        .add(\hold_button -> make_dict.value(
+            element: make_onoff.value
+            .action_({ |b|
+                if(b.value==0,{
+                    ~mode_switch.value;
+                    if(~on_arp==1,{
+                        ~mode_arp.value;
                     },{
-                        ~mode_poly.value;
+                        if(~on_mono==1,{
+                            ~mode_mono.value;
+                        },{
+                            ~mode_poly.value;
+                        });
                     });
+                },{
+                    ~noteoff.free;
                 });
-            },{
-                ~noteoff.free;
-            });
-        })],
-        [nil,make_txt.value.string_("ON"), make_onoff.value.action_({ |b|
-            ~mode_switch.value;
-            if(b.value==0,{
-                ~on_arp = 0;
-                ~hold_button.value_(0);
+            }),
+            default_p:0
+        ))
+        .add(\arp_button -> make_dict.value(
+            element: make_onoff.value
+            .action_({|b|
                 ~mode_switch.value;
-                if(~on_mono==1,{~mode_mono.value},{~mode_poly.value});
-            },{
-                ~mode_arp.value;
-                ~on_arp = 1;
-            });
-        })],
-        [nil,make_txt.value.string_("MODE"), PopUpMenu.new.items_(
-            ["UP","UPDOWN","DOWN","DOWNUP"]
-            ).value_(2).action_({ |p|
-            ~polarity=p.item;
-        })],
-        [nil,make_txt.value.string_("RANGE"),PopUpMenu.new.items_(["1","2","3"]).value_(0).action_({ |p|
-            ~octaves = p.value + 1;
-        })],
-        // arp rate = [1.5,50] Hz
-        [nil,make_txt.value.string_("RATE"), make_slider.value(0.134).action_({ |s|
-            TempoClock.default.tempo_(s.value.linlin(0,1,1.5,50));
-        })],
+                if(b.value==0,{
+                    ~on_arp = 0;
+                    ~elements[\hold_button][\element].valueAction_(0);
+                    ~mode_switch.value;
+                    if(~on_mono==1,{~mode_mono.value},{~mode_poly.value});
+                },{
+                    ~mode_arp.value;
+                    ~on_arp = 1;
+                });
+            }),
+            default_p:0
+        ))
+        .add(\arp_polarity -> make_dict.value(
+            element: PopUpMenu.new
+            .items_(["UP","UPDOWN","DOWN","DOWNUP"])
+            .action_({|p| ~polarity=p.item;}),
+            default_p: "UP",
+            p_to_v:{|p| ~elements[\arp_polarity][\element].items.detectIndex({|i| i==p})},
+            v_to_p:{|v| ~elements[\arp_polarity][\element].items[v]}
+        ))
+        .add(\arp_range -> make_dict.value(
+            element: PopUpMenu.new
+            .items_(["1","2","3"])
+            .action_({|p| ~octaves=p.value+1;}),
+            default_p: "1",
+            p_to_v:{|p| ~elements[\arp_range][\element].items.detectIndex({|i| i==p})},
+            v_to_p:{|v| ~elements[\arp_range][\element].items[v]}
+        ))
+        .add(\arp_rate -> make_dict.value(
+            element: make_slider.value
+            .action_({ |s|
+                TempoClock.default.tempo_(~elements[\arp_rate][\v_to_p].value(s.value));
+            }),
+            // arp rate = [1.5,50] Hz
+            default_p: 8,
+            p_to_v: {|p| p.linlin(1.5,50,0,1)},
+            v_to_p: {|v| v.linlin(0,1,1.5,50)}
+        ))
         //////
         // LFO
         //////
-        // lfo rate = [0.3,20] Hz
-        [nil,make_txt.value.string_("RATE"), make_slider.value(0).action_({ |s|
-            ~lfo.set(\rate,s.value.linlin(0,1,0.3,20));
-        })],
-        // delay time = [0,2.5] sec
-        [nil,make_txt.value.string_("DELAY\nTIME"), ~slider_delay = make_slider.value(0.5).action_({ |s|
-            if(~lfo_auto==0,{~lfo.set(\delay,s.value*2.5)});
-        })],
-        [nil,make_txt.value.string_("TRIG\nMODE"),PopUpMenu.new.items_(["MAN","AUTO"]).value_(1).action_({ |p|
-            ~lfo_auto = p.value;
-            // Any setting kills trigger and steals existing gate
-            ~lfo.set(\gate,-1);
-            ~lfo_trig.value_(0);
-            if(~on_arp==1,{
-                ~hold_button.value_(0);
-                ~mode_switch.value;
-                ~mode_arp.value;
-            });
-            if(~lfo_auto==1,{
-                // Enter AUTO mode, de-control delay time
-                ~lfo.set(\delay,1);
-            },{
-                // Restore delay time from slider
-                ~lfo.set(\delay,~slider_delay.value);
-            });
-        })],
-        //////
-        // DCO
-        //////
-        [nil,make_txt.value.string_("LFO"), make_slider.value(0).action_({ |s|
-            ~lfo.set(\amp,s.value);
-        })],
-        [nil,make_txt.value.string_("PWM"), make_slider.value(0).action_({ |s|
-            ~bus_pwm_manual.value_(s.value);
-        })],
-        [nil,make_txt.value,PopUpMenu.new.items_(["LFO","MAN","ENV"]).value_(1).action_({ |p|
-            // Reset pulsewidth mod envelope parameter
-            ~nkeys.do({|i| ~notes[i].set(\on_pwm_env,0)});
-            if(p.item=="MAN",{
-                ~nkeys.do({|i|
-                    ~notes[i].set(\bus_pwm,~bus_pwm_manual).set(\bus_dco_mod,~bus_lfo)
+
+    };
+    load_defaults = {
+        ~elements.keysValuesDo({|name,dict|
+            postln("\t"++name);
+            dict[\element].valueAction_(
+                dict[\p_to_v].value(dict[\default_p])
+            );
+        });
+    };
+    ////////////////
+    // B. GUI Layout
+    ////////////////
+    make_gui_layout = {
+        var make_txt, make_header,
+        win_main, win_control, win_env,
+        grid_main, grid_control, grid_env,
+        screen_arr, bounds_main, bounds_control, bounds_env, scale=1/3,
+        shift_linexp = {|n| n.linexp(0,1,0.01,1.01)-0.01},
+        invert_exp = {|n| (n+0.01).explin(0.01,1.01,0,1)};
+        // Factory methods for GUI items
+        make_header = {
+            StaticText.new.background_(Color.black).stringColor_(Color.white).align_(\center).font_(Font.new.pointSize_(18));
+        };
+        make_txt = { StaticText.new.string_("").align_(\center).font_(Font.new.pointSize_(14)) };
+        screen_arr = Window.screenBounds.asArray;
+        bounds_main = (screen_arr.copy.put(1,screen_arr[3]) * [1,1,1,2*scale]).asRect;
+        ///////////////
+        // LAYOUT: MAIN
+        ///////////////
+        grid_main = GridLayout.columns(
+            // ARP
+            [nil, make_txt.value.string_("KEY"), ~elements[\key_transpose][\element]],
+            [nil, make_txt.value.string_("HOLD"), ~elements[\hold_button][\element]],
+            [nil,make_txt.value.string_("ON"), ~elements[\arp_button][\element]],
+            [nil,make_txt.value.string_("MODE"), ~elements[\arp_polarity][\element]],
+            [nil,make_txt.value.string_("RANGE"),~elements[\arp_range][\element]],
+            [nil,make_txt.value.string_("RATE"), ~elements[\arp_rate][\element]],
+            // LFO
+            // lfo rate = [0.3,20] Hz
+            [nil,make_txt.value.string_("RATE"), make_slider.value(0).action_({ |s|
+                ~lfo.set(\rate,s.value.linlin(0,1,0.3,20));
+            })],
+            // delay time = [0,2.5] sec
+            [nil,make_txt.value.string_("DELAY\nTIME"), ~slider_delay = make_slider.value(0.5).action_({ |s|
+                if(~lfo_auto==0,{~lfo.set(\delay,s.value*2.5)});
+            })],
+            [nil,make_txt.value.string_("TRIG\nMODE"),PopUpMenu.new.items_(["MAN","AUTO"]).value_(1).action_({ |p|
+                ~lfo_auto = p.value;
+                // Any setting kills trigger and steals existing gate
+                ~lfo.set(\gate,-1);
+                ~lfo_trig.value_(0);
+                if(~on_arp==1,{
+                    ~elements[\hold_button][\element].valueAction_(0);
+                    ~mode_switch.value;
+                    ~mode_arp.value;
                 });
-            },{
-                // Kill DCO modulation
-                ~nkeys.do({|i| ~notes[i].set(\bus_dco_mod,~bus_zero)});
-                if(p.item=="LFO",{
-                    ~nkeys.do({|i| ~notes[i].set(\bus_pwm,~bus_lfo)});
+                if(~lfo_auto==1,{
+                    // Enter AUTO mode, de-control delay time
+                    ~lfo.set(\delay,1);
                 },{
-                    // Use the ADSR envelope generated in the synth
+                    // Restore delay time from slider
+                    ~lfo.set(\delay,~slider_delay.value);
+                });
+            })],
+            //////
+            // DCO
+            //////
+            [nil,make_txt.value.string_("LFO"), make_slider.value(0).action_({ |s|
+                ~lfo.set(\amp,s.value);
+            })],
+            [nil,make_txt.value.string_("PWM"), make_slider.value(0).action_({ |s|
+                ~bus_pwm_manual.value_(s.value);
+            })],
+            [nil,make_txt.value,PopUpMenu.new.items_(["LFO","MAN","ENV"]).value_(1).action_({ |p|
+                // Reset pulsewidth mod envelope parameter
+                ~nkeys.do({|i| ~notes[i].set(\on_pwm_env,0)});
+                if(p.item=="MAN",{
                     ~nkeys.do({|i|
-                        ~notes[i].set(\bus_pwm,~bus_pwm_manual).set(\on_pwm_env,1)});
-                });
-            });
-        })],
-        [nil,make_txt.value.string_("SQR"), make_onoff.value.action_({ |b|
-            ~nkeys.do({|i| ~notes[i].set(\on_sqr,b.value)});
-        })],
-        [nil,make_txt.value.string_("SAW"), make_onoff.value.action_({ |b|
-            ~nkeys.do({|i| ~notes[i].set(\on_saw,b.value)});
-        })],
-        [nil,make_txt.value.string_("SUB"), make_onoff.value.action_({ |b|
-            ~nkeys.do({|i| ~notes[i].set(\on_sub,b.value)});
-        })],
-        [nil,make_txt.value.string_("SUB\nOSC"), make_slider.value(0).action_({ |s|
-            ~nkeys.do({|i| ~notes[i].set(\amp_sub,s.value)});
-        })],
-        [nil,make_txt.value.string_("NOISE"), make_slider.value(0).action_({ |s|
-            ~nkeys.do({|i| ~notes[i].set(\amp_noise,s.value)});
-        })],
-        //////
-        // HPF
-        //////
-        // Cutoff frequencies approaching 40kHz yield (infinite amplitude) errors
-        [nil,make_txt.value.string_("FREQ"), make_slider.value(0).action_({ |s|
-            ~mixer.set(\freq_hpf,s.value.linexp(0,1,4,20000));
-        })],
-        //////
-        // VCF
-        //////
-        [nil,make_txt.value.string_("FREQ"), make_slider.value(0).action_({ |s|
-            ~nkeys.do({|i| ~notes[i].set(\vcf_cutoff_manual,s.value)});
-        })],
-        [nil,make_txt.value.string_("RES"), make_slider.value(0).action_({ |s|
-            // Resonance gain is 0 to 4 scale for MoogFF. At 4, self-oscillation occurs.
-            ~nkeys.do({|i| ~notes[i].set(\vcf_res,s.value.linlin(0,1,0,4))});
-        })],
-        [nil,make_txt.value,make_onoff.value.states_([
-            ["-",Color.white,Color.black], ["+",Color.black,nil]
-        ]).value_(1).action_({ |b|
-            ~nkeys.do({|i| ~notes[i].set(\vcf_polarity,2*b.value-1)});
-        })],
-        [nil,make_txt.value.string_("ENV"), make_slider.value(0).action_({ |s|
-            ~nkeys.do({|i| ~notes[i].set(\vcf_env_mod,shift_linexp.value(s.value))});
-        })],
-        [nil,make_txt.value.string_("LFO"), make_slider.value(0).action_({ |s|
-            ~nkeys.do({|i| ~notes[i].set(\vcf_lfo_mod,shift_linexp.value(s.value))});
-        })],
-        [nil,make_txt.value.string_("KYBD"), make_slider.value(1).action_({ |s|
-            ~nkeys.do({|i| ~notes[i].set(\vcf_kybd,s.value)});
-        })]
-    );
-    // (add headers)
-    grid_main.addSpanning(make_header.value.string_("ARPEGGIO"),0,0,1,6);
-    grid_main.addSpanning(make_header.value.string_("LFO"),0,6,1,3);
-    grid_main.addSpanning(make_header.value.string_("DCO"),0,9,1,8);
-    grid_main.add(make_header.value.string_("HPF"),0,17,1,1);
-    grid_main.addSpanning(make_header.value.string_("VCF"),0,18,1,6);
-    //////////////////
-    // LAYOUT: CONTROL
-    //////////////////
-    grid_control = GridLayout.columns(
-        [nil,make_txt.value.string_("DCO"), make_slider.value(1).action_({ |s|
-            ~nkeys.do({|i| ~notes[i].set(\bend_dco,s.value)});
-        })],
-        [nil,make_txt.value.string_("VCF"), make_slider.value(0).action_({ |s|
-            ~nkeys.do({|i| ~notes[i].set(\bend_vcf,s.value)});
-        })],
-        [nil,make_txt.value.string_("LFO TRIG"), ~lfo_trig = make_onoff.value(0).action_({ |b|
-            // No effect if auto mode, open the gate in manual mode
-            if(~lfo_auto==1, {b.value_(0)}, {~lfo.set(\gate,b.value)});
-        }).maxWidth_(3*bdim)],
-        [nil,make_txt.value.string_("OCTAVE"), PopUpMenu.new.items_(["UP","NORMAL","DOWN"]).value_(1).action_({ |p|
-            ~nkeys.do({|i| ~notes[i].set(\octave,1-p.value)})
-        }).maxWidth_(bdim*3)],
-        [nil,make_txt.value.string_("VOICES"), make_onoff.value.states_([
-            ["POLY",Color.black,nil],["MONO",Color.black,nil]
-        ]).value_(0).action_({ |b|
-            ~notes[0].set(\mslew,16384);
-            ~mode_switch.value;
-            ~hold_button.value_(0);
-            if(b.value==0,{
-                ~on_mono = 0;
-                if(~on_arp==1,{
-                    ~mode_arp.value;
+                        ~notes[i].set(\bus_pwm,~bus_pwm_manual).set(\bus_dco_mod,~bus_lfo)
+                    });
                 },{
-                    ~mode_poly.value;
+                    // Kill DCO modulation
+                    ~nkeys.do({|i| ~notes[i].set(\bus_dco_mod,~bus_zero)});
+                    if(p.item=="LFO",{
+                        ~nkeys.do({|i| ~notes[i].set(\bus_pwm,~bus_lfo)});
+                    },{
+                        // Use the ADSR envelope generated in the synth
+                        ~nkeys.do({|i|
+                            ~notes[i].set(\bus_pwm,~bus_pwm_manual).set(\on_pwm_env,1)});
+                    });
                 });
-            },{
-                ~on_mono = 1;
-                if(~on_arp==1,{
-                    ~mode_arp.value;
+            })],
+            [nil,make_txt.value.string_("SQR"), make_onoff.value.action_({ |b|
+                ~nkeys.do({|i| ~notes[i].set(\on_sqr,b.value)});
+            })],
+            [nil,make_txt.value.string_("SAW"), make_onoff.value.action_({ |b|
+                ~nkeys.do({|i| ~notes[i].set(\on_saw,b.value)});
+            })],
+            [nil,make_txt.value.string_("SUB"), make_onoff.value.action_({ |b|
+                ~nkeys.do({|i| ~notes[i].set(\on_sub,b.value)});
+            })],
+            [nil,make_txt.value.string_("SUB\nOSC"), make_slider.value(0).action_({ |s|
+                ~nkeys.do({|i| ~notes[i].set(\amp_sub,s.value)});
+            })],
+            [nil,make_txt.value.string_("NOISE"), make_slider.value(0).action_({ |s|
+                ~nkeys.do({|i| ~notes[i].set(\amp_noise,s.value)});
+            })],
+            //////
+            // HPF
+            //////
+            // Cutoff frequencies approaching 40kHz yield (infinite amplitude) errors
+            [nil,make_txt.value.string_("FREQ"), make_slider.value(0).action_({ |s|
+                ~mixer.set(\freq_hpf,s.value.linexp(0,1,4,20000));
+            })],
+            //////
+            // VCF
+            //////
+            [nil,make_txt.value.string_("FREQ"), make_slider.value(0).action_({ |s|
+                ~nkeys.do({|i| ~notes[i].set(\vcf_cutoff_manual,s.value)});
+            })],
+            [nil,make_txt.value.string_("RES"), make_slider.value(0).action_({ |s|
+                // Resonance gain is 0 to 4 scale for MoogFF. At 4, self-oscillation occurs.
+                ~nkeys.do({|i| ~notes[i].set(\vcf_res,s.value.linlin(0,1,0,4))});
+            })],
+            [nil,make_txt.value,make_onoff.value.states_([
+                ["-",Color.white,Color.black], ["+",Color.black,nil]
+            ]).value_(1).action_({ |b|
+                ~nkeys.do({|i| ~notes[i].set(\vcf_polarity,2*b.value-1)});
+            })],
+            [nil,make_txt.value.string_("ENV"), make_slider.value(0).action_({ |s|
+                ~nkeys.do({|i| ~notes[i].set(\vcf_env_mod,shift_linexp.value(s.value))});
+            })],
+            [nil,make_txt.value.string_("LFO"), make_slider.value(0).action_({ |s|
+                ~nkeys.do({|i| ~notes[i].set(\vcf_lfo_mod,shift_linexp.value(s.value))});
+            })],
+            [nil,make_txt.value.string_("KYBD"), make_slider.value(1).action_({ |s|
+                ~nkeys.do({|i| ~notes[i].set(\vcf_kybd,s.value)});
+            })]
+        );
+        // (add headers)
+        grid_main.addSpanning(make_header.value.string_("ARPEGGIO"),0,0,1,6);
+        grid_main.addSpanning(make_header.value.string_("LFO"),0,6,1,3);
+        grid_main.addSpanning(make_header.value.string_("DCO"),0,9,1,8);
+        grid_main.add(make_header.value.string_("HPF"),0,17,1,1);
+        grid_main.addSpanning(make_header.value.string_("VCF"),0,18,1,6);
+        //////////////////
+        // LAYOUT: CONTROL
+        //////////////////
+        grid_control = GridLayout.columns(
+            [nil,make_txt.value.string_("DCO"), make_slider.value(1).action_({ |s|
+                ~nkeys.do({|i| ~notes[i].set(\bend_dco,s.value)});
+            })],
+            [nil,make_txt.value.string_("VCF"), make_slider.value(0).action_({ |s|
+                ~nkeys.do({|i| ~notes[i].set(\bend_vcf,s.value)});
+            })],
+            [nil,make_txt.value.string_("LFO TRIG"), ~lfo_trig = make_onoff.value(0).action_({ |b|
+                // No effect if auto mode, open the gate in manual mode
+                if(~lfo_auto==1, {b.value_(0)}, {~lfo.set(\gate,b.value)});
+            }).maxWidth_(3*button_dim)],
+            [nil,make_txt.value.string_("OCTAVE"), PopUpMenu.new.items_(["UP","NORMAL","DOWN"]).value_(1).action_({ |p|
+                ~nkeys.do({|i| ~notes[i].set(\octave,1-p.value)})
+            }).maxWidth_(button_dim*3)],
+            [nil,make_txt.value.string_("VOICES"), make_onoff.value.states_([
+                ["POLY",Color.black,nil],["MONO",Color.black,nil]
+            ]).value_(0).action_({ |b|
+                ~notes[0].set(\mslew,16384);
+                ~mode_switch.value;
+                ~elements[\hold_button][\element].valueAction_(0);
+                if(b.value==0,{
+                    ~on_mono = 0;
+                    if(~on_arp==1,{
+                        ~mode_arp.value;
+                    },{
+                        ~mode_poly.value;
+                    });
                 },{
-                    ~mode_mono.value;
+                    ~on_mono = 1;
+                    if(~on_arp==1,{
+                        ~mode_arp.value;
+                    },{
+                        ~mode_mono.value;
+                    });
                 });
-            });
-        })],
-        [nil,make_txt.value.string_("VOLUME"), Knob.new.value_(0.1).action_({ |k|
-            ~mixer.set(\amp,k.value.linlin(0,1,0,5))
-        }).maxWidth_(bdim*3)]
-    );
-    // (add headers)
-    grid_control.addSpanning(make_header.value.string_("BEND"),0,0,1,2);
-    grid_control.addSpanning(make_header.value.string_(""),0,2,1,3);
-    //////////////////
-    // LAYOUT: ENV+FX
-    //////////////////
-    grid_env = GridLayout.columns(
-        [nil,make_txt.value.string_(""), make_onoff.value.states_([
-            ["GATE",Color.black,nil],["ENV",Color.black,nil]
-        ]).action_({ |b|
-            ~nkeys.do({|i| ~notes[i].set(\on_adsr,b.value)});
-        })],
-        // A(0)=1ms A(0.5)=1s, A(1)=3s
-        [nil,make_txt.value.string_("A"), make_slider.value(0.01).action_({ |s|
-            ~nkeys.do({|i| ~notes[i].set(\env_a,s.value.lincurve(0.5,1,1,3,0.69415,'nil'))});
-        })],
-        // D(0)=2ms D(0.5)=1s, D(1)=12s
-        [nil,make_txt.value.string_("D"), make_slider.value(0.25).action_({ |s|
-            ~nkeys.do({|i| ~notes[i].set(\env_d,s.value.lincurve(0.5,1,1,12,2.3999,'nil'))});
-        })],
-        // S is a linear mapping from [0,1]
-        [nil,make_txt.value.string_("S"), make_slider.value(0.5).action_({ |s|
-            ~nkeys.do({|i| ~notes[i].set(\env_s,s.value)});
-        })],
-        // R uses the same mapping function as D
-        [nil,make_txt.value.string_("R"), make_slider.value(0.5).action_({ |s|
-            ~nkeys.do({|i| ~notes[i].set(\env_r,s.value.lincurve(0.5,1,1,12,2.3999,'nil'))});
-        })],
-        // Chorus: guessed at I, II modes
-        [nil,make_txt.value.string_("I"), ~chorus_i = make_onoff.value.action_({ |b|
-            ~chorus_ii.value_(0);
-            ~mixer.set(
-                \chorus_level, b.value * 0.25,
-                \chorus_rate, b.value * 0.25,
-                \chorus_depth, b.value * 0.25,
-            );
-        })],
-        [nil,make_txt.value.string_("II"), ~chorus_ii = make_onoff.value.action_({ |b|
-            ~chorus_i.value_(0);
-            ~mixer.set(
-                \chorus_level, b.value * 0.5,
-                \chorus_rate, b.value * 0.5,
-                \chorus_depth, b.value * 0.1,
-            );
-        })],
-        // Stereo detuning. Can abuse to simulate amplitude modulation
-        [nil,make_txt.value.string_("DETUNE"), make_slider.value(0).action_({ |s|
-            ~nkeys.do({|i| ~notes[i].set(\detune,shift_linexp.value(s.value)/2)});
-        })],
-    );
-    // (add headers)
-    grid_env.addSpanning(make_header.value.string_("VCA"),0,0,1,1);
-    grid_env.addSpanning(make_header.value.string_("ENV"),0,1,1,4);
-    grid_env.addSpanning(make_header.value.string_("CHORUS"),0,5,1,3);
-    //////////////////
-    // MAIN WINDOW
-    //////////////////
-    win_main = Window.new(bounds:bounds_main).layout_(
-        VLayout(
-            grid_main,
-            HLayout(
-                grid_control,
-                View(),
-                grid_env
+            })],
+            [nil,make_txt.value.string_("VOLUME"), Knob.new.value_(0.1).action_({ |k|
+                ~mixer.set(\amp,k.value.linlin(0,1,0,5))
+            }).maxWidth_(button_dim*3)]
+        );
+        // (add headers)
+        grid_control.addSpanning(make_header.value.string_("BEND"),0,0,1,2);
+        grid_control.addSpanning(make_header.value.string_(""),0,2,1,3);
+        //////////////////
+        // LAYOUT: ENV+FX
+        //////////////////
+        grid_env = GridLayout.columns(
+            [nil,make_txt.value.string_(""), make_onoff.value.states_([
+                ["GATE",Color.black,nil],["ENV",Color.black,nil]
+            ]).action_({ |b|
+                ~nkeys.do({|i| ~notes[i].set(\on_adsr,b.value)});
+            })],
+            // A(0)=1ms A(0.5)=1s, A(1)=3s
+            [nil,make_txt.value.string_("A"), make_slider.value(0.01).action_({ |s|
+                ~nkeys.do({|i| ~notes[i].set(\env_a,s.value.lincurve(0.5,1,1,3,0.69415,'nil'))});
+            })],
+            // D(0)=2ms D(0.5)=1s, D(1)=12s
+            [nil,make_txt.value.string_("D"), make_slider.value(0.25).action_({ |s|
+                ~nkeys.do({|i| ~notes[i].set(\env_d,s.value.lincurve(0.5,1,1,12,2.3999,'nil'))});
+            })],
+            // S is a linear mapping from [0,1]
+            [nil,make_txt.value.string_("S"), make_slider.value(0.5).action_({ |s|
+                ~nkeys.do({|i| ~notes[i].set(\env_s,s.value)});
+            })],
+            // R uses the same mapping function as D
+            [nil,make_txt.value.string_("R"), make_slider.value(0.5).action_({ |s|
+                ~nkeys.do({|i| ~notes[i].set(\env_r,s.value.lincurve(0.5,1,1,12,2.3999,'nil'))});
+            })],
+            // Chorus: guessed at I, II modes
+            [nil,make_txt.value.string_("I"), ~chorus_i = make_onoff.value.action_({ |b|
+                ~chorus_ii.value_(0);
+                ~mixer.set(
+                    \chorus_level, b.value * 0.25,
+                    \chorus_rate, b.value * 0.25,
+                    \chorus_depth, b.value * 0.25,
+                );
+            })],
+            [nil,make_txt.value.string_("II"), ~chorus_ii = make_onoff.value.action_({ |b|
+                ~chorus_i.value_(0);
+                ~mixer.set(
+                    \chorus_level, b.value * 0.5,
+                    \chorus_rate, b.value * 0.5,
+                    \chorus_depth, b.value * 0.1,
+                );
+            })],
+            // Stereo detuning. Can abuse to simulate amplitude modulation
+            [nil,make_txt.value.string_("DETUNE"), make_slider.value(0).action_({ |s|
+                ~nkeys.do({|i| ~notes[i].set(\detune,shift_linexp.value(s.value)/2)});
+            })],
+        );
+        // (add headers)
+        grid_env.addSpanning(make_header.value.string_("VCA"),0,0,1,1);
+        grid_env.addSpanning(make_header.value.string_("ENV"),0,1,1,4);
+        grid_env.addSpanning(make_header.value.string_("CHORUS"),0,5,1,3);
+        //////////////////
+        // MAIN WINDOW
+        //////////////////
+        win_main = Window.new(bounds:bounds_main).layout_(
+            VLayout(
+                grid_main,
+                HLayout(
+                    grid_control,
+                    View(),
+                    grid_env
+                )
             )
-        )
-    ).front;
+        ).front;
+    };
+    make_gui_elements.value;
+    "Made elements.".postln;
+    load_defaults.value;
+    "Loading defaults...".postln;
+    make_gui_layout.value;
+    "Made layout.".postln;
 };
 
 main = {
     make_synthdefs.value;
     make_synths.value;
     make_playmodes.value;
+    "Made backend.".postln;
     make_gui.value;
 };
 
 main.value;
 )
+100.do({"".postln})
