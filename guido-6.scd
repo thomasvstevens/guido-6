@@ -343,7 +343,7 @@ make_gui = {
                     ~noteoff.free;
                 });
             }),
-            default_p:0
+            default_p: 0
         ))
         .add(\arp_button -> make_dict.value(
             element: make_onoff.value
@@ -359,7 +359,7 @@ make_gui = {
                     ~on_arp = 1;
                 });
             }),
-            default_p:0
+            default_p: 0
         ))
         .add(\arp_polarity -> make_dict.value(
             element: PopUpMenu.new
@@ -448,16 +448,96 @@ make_gui = {
             p_to_v: {|p| ~elements[\lfo_trig_mode][\element].items.detectIndex({|i| i==p})},
             v_to_p: {|v| ~elements[\lfo_trig_mode][\element].items[v]}
         ));
+        postln("\tBuilt LFO...");
         //////
         // DCO
         //////
+        ~elements.add(\lfo_depth -> make_dict.value(
+            element: make_slider.value
+            .action_({ |s| ~lfo.set(\amp,s.value); }),
+            default_p: 0
+        ))
+        .add(\pulse_width -> make_dict.value(
+            element: make_slider.value
+            .action_({ |s| ~bus_pwm_manual.value_(s.value); }),
+            default_p: 0
+        ))
+        .add(\pwm_bus_menu -> make_dict.value(
+            element: PopUpMenu.new
+            .items_(["LFO","MAN","ENV"])
+            .action_({ |pop|
+                // Reset pulsewidth mod envelope parameter
+                ~nkeys.do({|i| ~notes[i].set(\on_pwm_env,0)});
+                if(pop.item=="MAN",{
+                    ~nkeys.do({|i|
+                        ~notes[i].set(\bus_pwm,~bus_pwm_manual).set(\bus_dco_mod,~bus_lfo)
+                    });
+                },{
+                    // Kill DCO modulation
+                    ~nkeys.do({|i| ~notes[i].set(\bus_dco_mod,~bus_zero)});
+                    if(pop.item=="LFO",{
+                        ~nkeys.do({|i| ~notes[i].set(\bus_pwm,~bus_lfo)});
+                    },{
+                        // Use the ADSR envelope generated in the synth
+                        ~nkeys.do({|i|
+                            ~notes[i].set(\bus_pwm,~bus_pwm_manual).set(\on_pwm_env,1)});
+                    });
+                });
+            }),
+            default_p: "MAN",
+            p_to_v: {|p| ~elements[\pwm_bus_menu][\element].items.detectIndex({|i| i==p})},
+            v_to_p: {|v| ~elements[\pwm_bus_menu][\element].items[v]}
+        ))
+        .add(\square_button -> make_dict.value(
+            element: make_onoff.value
+            .action_({ |b| ~nkeys.do({|i| ~notes[i].set(\on_sqr,b.value)}); }),
+            default_p: 0
+        ))
+        .add(\saw_button -> make_dict.value(
+            element: make_onoff.value
+            .action_({ |b| ~nkeys.do({|i| ~notes[i].set(\on_saw,b.value)}); }),
+            default_p: 0
+        ))
+        .add(\sub_button -> make_dict.value(
+            element: make_onoff.value
+            .action_({ |b| ~nkeys.do({|i| ~notes[i].set(\on_sub,b.value)}); }),
+            default_p: 0
+        ))
+        .add(\sub_slider -> make_dict.value(
+            element: make_slider.value
+            .action_({ |s| ~nkeys.do({|i| ~notes[i].set(\amp_sub,s.value)}); }),
+            default_p: 0
+        ))
+        .add(\noise_slider -> make_dict.value(
+            element: make_slider.value
+            .action_({ |s| ~nkeys.do({|i| ~notes[i].set(\amp_noise,s.value)}); }),
+            default_p: 0
+        ));
+        postln("\tBuilt DCO...");
+        //////
+        // HPF
+        //////
+        ~elements.add(\hpf_cutoff -> make_dict.value(
+            element: make_slider.value.action_({ |s|
+                ~mixer.set(\freq_hpf,~elements[\hpf_cutoff][\v_to_p].value(s.value));
+            }),
+            // Note: Cutoff frequencies approaching 40kHz yield (infinite amplitude) errors
+            default_p: 4,
+            p_to_v: {|p| p.explin(4,20000,0,1)},
+            v_to_p: {|v| v.linexp(0,1,4,20000)}
+        ))
+        //////
+        // VCF
+        //////
         //
     };
+    ~elements.postln;
     load_defaults = {
         ~elements.keysValuesDo({|name,dict|
             postln("\t"++name);
+            dict.associationsDo({|a| postln(a);});
             dict[\element].valueAction_(
-                dict[\p_to_v].value(dict[\default_p])
+                dict[\p_to_v].value(dict[\default_p]);
             );
         });
     };
@@ -494,56 +574,17 @@ make_gui = {
             [nil,make_txt.value.string_("DELAY\nTIME"), ~elements[\lfo_delay_time][\element]],
             [nil,make_txt.value.string_("TRIG\nMODE"), ~elements[\lfo_trig_mode][\element]],
             // DCO
-            [nil,make_txt.value.string_("LFO"), make_slider.value(0).action_({ |s|
-                ~lfo.set(\amp,s.value);
-            })],
-            [nil,make_txt.value.string_("PWM"), make_slider.value(0).action_({ |s|
-                ~bus_pwm_manual.value_(s.value);
-            })],
-            [nil,make_txt.value,PopUpMenu.new.items_(["LFO","MAN","ENV"]).value_(1).action_({ |p|
-                // Reset pulsewidth mod envelope parameter
-                ~nkeys.do({|i| ~notes[i].set(\on_pwm_env,0)});
-                if(p.item=="MAN",{
-                    ~nkeys.do({|i|
-                        ~notes[i].set(\bus_pwm,~bus_pwm_manual).set(\bus_dco_mod,~bus_lfo)
-                    });
-                },{
-                    // Kill DCO modulation
-                    ~nkeys.do({|i| ~notes[i].set(\bus_dco_mod,~bus_zero)});
-                    if(p.item=="LFO",{
-                        ~nkeys.do({|i| ~notes[i].set(\bus_pwm,~bus_lfo)});
-                    },{
-                        // Use the ADSR envelope generated in the synth
-                        ~nkeys.do({|i|
-                            ~notes[i].set(\bus_pwm,~bus_pwm_manual).set(\on_pwm_env,1)});
-                    });
-                });
-            })],
-            [nil,make_txt.value.string_("SQR"), make_onoff.value.action_({ |b|
-                ~nkeys.do({|i| ~notes[i].set(\on_sqr,b.value)});
-            })],
-            [nil,make_txt.value.string_("SAW"), make_onoff.value.action_({ |b|
-                ~nkeys.do({|i| ~notes[i].set(\on_saw,b.value)});
-            })],
-            [nil,make_txt.value.string_("SUB"), make_onoff.value.action_({ |b|
-                ~nkeys.do({|i| ~notes[i].set(\on_sub,b.value)});
-            })],
-            [nil,make_txt.value.string_("SUB\nOSC"), make_slider.value(0).action_({ |s|
-                ~nkeys.do({|i| ~notes[i].set(\amp_sub,s.value)});
-            })],
-            [nil,make_txt.value.string_("NOISE"), make_slider.value(0).action_({ |s|
-                ~nkeys.do({|i| ~notes[i].set(\amp_noise,s.value)});
-            })],
-            //////
+            [nil,make_txt.value.string_("LFO"), ~elements[\lfo_depth][\element]],
+            [nil,make_txt.value.string_("PWM"), ~elements[\pulse_width][\element]],
+            [nil,make_txt.value, ~elements[\pwm_bus_menu][\element]],
+            [nil,make_txt.value.string_("SQR"), ~elements[\square_button][\element]],
+            [nil,make_txt.value.string_("SAW"), ~elements[\saw_button][\element]],
+            [nil,make_txt.value.string_("SUB"), ~elements[\sub_button][\element]],
+            [nil,make_txt.value.string_("SUB\nOSC"), ~elements[\sub_slider][\element]],
+            [nil,make_txt.value.string_("NOISE"), ~elements[\noise_slider][\element]],
             // HPF
-            //////
-            // Cutoff frequencies approaching 40kHz yield (infinite amplitude) errors
-            [nil,make_txt.value.string_("FREQ"), make_slider.value(0).action_({ |s|
-                ~mixer.set(\freq_hpf,s.value.linexp(0,1,4,20000));
-            })],
-            //////
+            [nil,make_txt.value.string_("FREQ"), ~elements[\hpf_cutoff][\element]],
             // VCF
-            //////
             [nil,make_txt.value.string_("FREQ"), make_slider.value(0).action_({ |s|
                 ~nkeys.do({|i| ~notes[i].set(\vcf_cutoff_manual,s.value)});
             })],
@@ -682,8 +723,9 @@ make_gui = {
     };
     make_gui_elements.value;
     "Made elements.".postln;
-    load_defaults.value;
     "Loading defaults...".postln;
+    load_defaults.value;
+    "Making layout...".postln;
     make_gui_layout.value;
     "Made layout.".postln;
 };
