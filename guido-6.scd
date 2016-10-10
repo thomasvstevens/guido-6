@@ -316,10 +316,12 @@ make_gui = {
             .items_(
                 Array.fill(13,{|i| (7-i).asString}).put(7,"")
             )
-            .action_({ |p|
-                ~nkeys.do({|i| ~notes[i].set(\mtranspose,~elements[\key_transpose][\parameter])});
+            .action_({ |pop|
+                ~nkeys.do({|i| ~notes[i].set(\mtranspose,
+                    ~elements[\key_transpose][\v_to_p].value(pop.value)
+                )});
             }),
-            default_p:0,
+            default_p: 0,
             p_to_v:{|p| 7-p},
             v_to_p:{|v| 7-v}
         ))
@@ -384,11 +386,72 @@ make_gui = {
             default_p: 8,
             p_to_v: {|p| p.linlin(1.5,50,0,1)},
             v_to_p: {|v| v.linlin(0,1,1.5,50)}
-        ))
+        ));
+        postln("\tBuilt ARP...");
         //////
         // LFO
         //////
-
+        ~elements.add(\lfo_rate -> make_dict.value(
+            element: make_slider.value
+            .action_({ |s|
+                ~lfo.set(\rate,~elements[\lfo_rate][\v_to_p].value(s.value));
+            }),
+            // lfo rate = [0.3,20] Hz
+            default_p: 1,
+            p_to_v: {|p| p.linlin(0.3,20,0,1)},
+            v_to_p: {|v| v.linlin(0,1,0.3,20)}
+        ))
+        .add(\lfo_delay_time -> make_dict.value(
+            element: make_slider.value
+            .action_({ |s|
+                if(~lfo_auto==0, {~lfo.set(~elements[\lfo_delay_time][\v_to_p].value(s.value))});
+            }),
+            // delay time = [0,2.5] sec
+            default_p: 1,
+            p_to_v: {|p| p.linlin(0,2.5,0,1)},
+            v_to_p: {|v| v.linlin(0,1,0,2.5)}
+        ))
+        .add(\lfo_trig_button -> make_dict.value(
+            element: make_onoff.value
+            .action_({ |b|
+                // No effect if auto mode, open the gate in manual mode
+                if(~lfo_auto==1, {b.value_(0)}, {~lfo.set(\gate,b.value)});
+            })
+            .maxWidth_(3*button_dim),
+            default_p: 0
+        ))
+        .add(\lfo_trig_mode -> make_dict.value(
+            element: PopUpMenu.new
+            .items_(["MAN","AUTO"])
+            .action_({ |p|
+                // For now, keep lfo_auto global but sync to element value. Used in Play Mode logic.
+                ~lfo_auto = p.value;
+                // Any setting kills trigger and steals existing gate
+                ~lfo.set(\gate,-1);
+                ~elements[\lfo_trig_button][\element].valueAction_(0);
+                if(~on_arp==1,{
+                    ~elements[\hold_button][\element].valueAction_(0);
+                    ~mode_switch.value;
+                    ~mode_arp.value;
+                });
+                if(~lfo_auto==1,{
+                    // Enter AUTO mode, de-control delay time
+                        ~lfo.set(\delay,1);
+                },{
+                    // Restore delay time from slider
+                        ~lfo.set(\delay, ~elements[\lfo_delay_time][\v_to_p].value(
+                            ~elements[\lfo_delay_time][\element].value)
+                        );
+                });
+            }),
+            default_p: "AUTO",
+            p_to_v: {|p| ~elements[\lfo_trig_mode][\element].items.detectIndex({|i| i==p})},
+            v_to_p: {|v| ~elements[\lfo_trig_mode][\element].items[v]}
+        ));
+        //////
+        // DCO
+        //////
+        //
     };
     load_defaults = {
         ~elements.keysValuesDo({|name,dict|
@@ -427,35 +490,10 @@ make_gui = {
             [nil,make_txt.value.string_("RANGE"),~elements[\arp_range][\element]],
             [nil,make_txt.value.string_("RATE"), ~elements[\arp_rate][\element]],
             // LFO
-            // lfo rate = [0.3,20] Hz
-            [nil,make_txt.value.string_("RATE"), make_slider.value(0).action_({ |s|
-                ~lfo.set(\rate,s.value.linlin(0,1,0.3,20));
-            })],
-            // delay time = [0,2.5] sec
-            [nil,make_txt.value.string_("DELAY\nTIME"), ~slider_delay = make_slider.value(0.5).action_({ |s|
-                if(~lfo_auto==0,{~lfo.set(\delay,s.value*2.5)});
-            })],
-            [nil,make_txt.value.string_("TRIG\nMODE"),PopUpMenu.new.items_(["MAN","AUTO"]).value_(1).action_({ |p|
-                ~lfo_auto = p.value;
-                // Any setting kills trigger and steals existing gate
-                ~lfo.set(\gate,-1);
-                ~lfo_trig.value_(0);
-                if(~on_arp==1,{
-                    ~elements[\hold_button][\element].valueAction_(0);
-                    ~mode_switch.value;
-                    ~mode_arp.value;
-                });
-                if(~lfo_auto==1,{
-                    // Enter AUTO mode, de-control delay time
-                    ~lfo.set(\delay,1);
-                },{
-                    // Restore delay time from slider
-                    ~lfo.set(\delay,~slider_delay.value);
-                });
-            })],
-            //////
+            [nil,make_txt.value.string_("RATE"), ~elements[\lfo_rate][\element]],
+            [nil,make_txt.value.string_("DELAY\nTIME"), ~elements[\lfo_delay_time][\element]],
+            [nil,make_txt.value.string_("TRIG\nMODE"), ~elements[\lfo_trig_mode][\element]],
             // DCO
-            //////
             [nil,make_txt.value.string_("LFO"), make_slider.value(0).action_({ |s|
                 ~lfo.set(\amp,s.value);
             })],
@@ -544,10 +582,7 @@ make_gui = {
             [nil,make_txt.value.string_("VCF"), make_slider.value(0).action_({ |s|
                 ~nkeys.do({|i| ~notes[i].set(\bend_vcf,s.value)});
             })],
-            [nil,make_txt.value.string_("LFO TRIG"), ~lfo_trig = make_onoff.value(0).action_({ |b|
-                // No effect if auto mode, open the gate in manual mode
-                if(~lfo_auto==1, {b.value_(0)}, {~lfo.set(\gate,b.value)});
-            }).maxWidth_(3*button_dim)],
+            [nil,make_txt.value.string_("LFO TRIG"), ~elements[\lfo_trig_button][\element]],
             [nil,make_txt.value.string_("OCTAVE"), PopUpMenu.new.items_(["UP","NORMAL","DOWN"]).value_(1).action_({ |p|
                 ~nkeys.do({|i| ~notes[i].set(\octave,1-p.value)})
             }).maxWidth_(button_dim*3)],
@@ -663,4 +698,3 @@ main = {
 
 main.value;
 )
-100.do({"".postln})
