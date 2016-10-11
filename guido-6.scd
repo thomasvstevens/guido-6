@@ -37,6 +37,9 @@ var make_synthdefs,make_synths,make_playmodes,make_gui,load_defaults,load_patch,
 ///////////////
 // 1. SYNTHDEFS
 ///////////////
+// Globals for VCF cutoff frequency bounds
+~vcf_cutoff_min=1;
+~vcf_cutoff_max=20000;
 make_synthdefs = {
     // DCO
     SynthDef.new(\dco,{|out,freq=261.6,mtranspose=0,mslew=16384,
@@ -45,10 +48,10 @@ make_synthdefs = {
         bus_pwm,bus_dco_mod,bus_lfo,detune=0,octave=0,
         on_adsr=0,on_pwm_env=0,
         env_a=0.015,env_d=0.233,env_s=0.5,env_r=1,
-        vcf_res=0,vcf_cutoff_manual=0,vcf_env_mod=0,vcf_lfo_mod=0,vcf_kybd=1,vcf_polarity=1,
+        vcf_res=0,vcf_ratio=1,vcf_env_mod=0,vcf_lfo_mod=0,vcf_kybd=1,vcf_polarity=1,
         gate=1|
         var sqr,saw,sub,noise,sig,pwm_in,pwm,env_gate,env_adsr,env,dco_freq,
-        cutoff_min=4,cutoff_max=20000,cutoff,lfo_cutoff,env_cutoff;
+        cutoff,lfo_cutoff,env_cutoff;
         // Calculate envelopes for availability to controls. Decide gate.
         env_gate = Linen.kr(gate,0.015625,1,0.015625,0);
         env_adsr = EnvGen.kr(Env.adsr(env_a,env_d,env_s,env_r),gate,doneAction:0);
@@ -69,14 +72,14 @@ make_synthdefs = {
         // Mix all sources to stereo
         sig = Mix.ar([sqr,saw,sub!2,noise!2]);
         // VCF: keyboard voltage follower sets fundamental, vcf freq slider sets cutoff freq as a ratio to fundamental
-        cutoff = vcf_kybd.linlin(0,1,cutoff_min,freq) * vcf_cutoff_manual.linexp(0,1,1,(cutoff_max/cutoff_min));
+        cutoff = vcf_kybd.linlin(0,1,~vcf_cutoff_min,freq) * vcf_ratio;
         // Env offset: specs say 10 octaves max
         env_cutoff = (env_adsr * vcf_env_mod).linexp(0,1,1,120.midiratio);
         // LFO offset: specs say 6 octaves max
         lfo_cutoff = (vcf_lfo_mod * In.kr(bus_lfo)).linexp(-1,1,(-72).midiratio,72.midiratio);
         cutoff = cutoff * env_cutoff.pow(vcf_polarity) * lfo_cutoff;
         cutoff = cutoff * bend_vcf.linlin(0,1,1,bend.midiratio);
-        cutoff = cutoff.clip(cutoff_min,cutoff_max);
+        cutoff = cutoff.clip(~vcf_cutoff_min,~vcf_cutoff_max);
         sig = MoogFF.ar(sig, cutoff, vcf_res);
         Out.ar(out, env*sig);
     }).add;
@@ -327,6 +330,8 @@ make_gui = {
         ))
         .add(\hold_button -> make_dict.value(
             element: make_onoff.value
+            // Use value_(0) to turn off HOLD (esp. during ARP).
+            // Using valueAction_ will crash Pbind with empty list.
             .action_({ |b|
                 if(b.value==0,{
                     ~mode_switch.value;
@@ -351,7 +356,7 @@ make_gui = {
                 ~mode_switch.value;
                 if(b.value==0,{
                     ~on_arp = 0;
-                    ~elements[\hold_button][\element].valueAction_(0);
+                    ~elements[\hold_button][\element].value_(0);
                     ~mode_switch.value;
                     if(~on_mono==1,{~mode_mono.value},{~mode_poly.value});
                 },{
@@ -430,7 +435,7 @@ make_gui = {
                 ~lfo.set(\gate,-1);
                 ~elements[\lfo_trig_button][\element].valueAction_(0);
                 if(~on_arp==1,{
-                    ~elements[\hold_button][\element].valueAction_(0);
+                    ~elements[\hold_button][\element].value_(0);
                     ~mode_switch.value;
                     ~mode_arp.value;
                 });
@@ -529,13 +534,35 @@ make_gui = {
         //////
         // VCF
         //////
-        //
+        .add(\vcf_ratio -> make_dict.value(
+            element: make_slider.value.
+            action_({ |s| ~nkeys.do({|i| ~notes[i].set(\vcf_ratio,
+                ~elements[\vcf_ratio][\v_to_p].value(s.value))}); }),
+            default_p: ~vcf_cutoff_min,
+            p_to_v: {|p| p.explin(1,(~vcf_cutoff_max/~vcf_cutoff_min),0,1)},
+            v_to_p: {|v| v.linexp(0,1,1,(~vcf_cutoff_max/~vcf_cutoff_min))}
+        ))
+        .add(\resonance -> make_dict.value(
+            // Resonance gain is 0 to 4 scale for MoogFF. At 4, self-oscillation occurs.
+            element: make_slider.value
+                .action_({ |s| ~nkeys.do({|i|
+                    ~notes[i].set(\vcf_res, ~elements[\resonance][\v_to_p].value(s.value));
+                });
+            }),
+            default_p: 0,
+            p_to_v: {|p| p.linlin(0,4,0,1)},
+            v_to_p: {|v| v.linlin(0,1,0,4)}
+        ))
+        .add(\kybd_follow_frac -> make_dict.value(
+            element: make_slider.value
+                .action_({|s| ~nkeys.do({|i| ~notes[i].set(\vcf_kybd,s.value)}); }),
+            default_p: 1
+        ))
     };
     ~elements.postln;
     load_defaults = {
         ~elements.keysValuesDo({|name,dict|
             postln("\t"++name);
-            dict.associationsDo({|a| postln(a);});
             dict[\element].valueAction_(
                 dict[\p_to_v].value(dict[\default_p]);
             );
@@ -585,13 +612,8 @@ make_gui = {
             // HPF
             [nil,make_txt.value.string_("FREQ"), ~elements[\hpf_cutoff][\element]],
             // VCF
-            [nil,make_txt.value.string_("FREQ"), make_slider.value(0).action_({ |s|
-                ~nkeys.do({|i| ~notes[i].set(\vcf_cutoff_manual,s.value)});
-            })],
-            [nil,make_txt.value.string_("RES"), make_slider.value(0).action_({ |s|
-                // Resonance gain is 0 to 4 scale for MoogFF. At 4, self-oscillation occurs.
-                ~nkeys.do({|i| ~notes[i].set(\vcf_res,s.value.linlin(0,1,0,4))});
-            })],
+            [nil,make_txt.value.string_("FREQ"), ~elements[\vcf_ratio][\element]],
+            [nil,make_txt.value.string_("RES"), ~elements[\resonance][\element]],
             [nil,make_txt.value,make_onoff.value.states_([
                 ["-",Color.white,Color.black], ["+",Color.black,nil]
             ]).value_(1).action_({ |b|
@@ -603,9 +625,7 @@ make_gui = {
             [nil,make_txt.value.string_("LFO"), make_slider.value(0).action_({ |s|
                 ~nkeys.do({|i| ~notes[i].set(\vcf_lfo_mod,shift_linexp.value(s.value))});
             })],
-            [nil,make_txt.value.string_("KYBD"), make_slider.value(1).action_({ |s|
-                ~nkeys.do({|i| ~notes[i].set(\vcf_kybd,s.value)});
-            })]
+            [nil,make_txt.value.string_("KYBD"), ~elements[\kybd_follow_frac][\element]]
         );
         // (add headers)
         grid_main.addSpanning(make_header.value.string_("ARPEGGIO"),0,0,1,6);
@@ -632,7 +652,7 @@ make_gui = {
             ]).value_(0).action_({ |b|
                 ~notes[0].set(\mslew,16384);
                 ~mode_switch.value;
-                ~elements[\hold_button][\element].valueAction_(0);
+                ~elements[\hold_button][\element].value_(0);
                 if(b.value==0,{
                     ~on_mono = 0;
                     if(~on_arp==1,{
