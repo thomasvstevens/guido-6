@@ -38,8 +38,13 @@ var make_synthdefs,make_synths,make_playmodes,make_gui,load_defaults,load_patch,
 // 1. SYNTHDEFS
 ///////////////
 // Globals for VCF cutoff frequency bounds
+// Specs say 4 Hz min, but for readability of params, use 1 Hz.
 ~vcf_cutoff_min=1;
 ~vcf_cutoff_max=20000;
+// Env scaling: specs say 10 octaves max
+~vcf_ratio_max=120.midiratio;
+// LFO scaling: specs say 6 octaves max
+~lfo_ratio_max=72.midiratio;
 make_synthdefs = {
     // DCO
     SynthDef.new(\dco,{|out,freq=261.6,mtranspose=0,mslew=16384,
@@ -48,7 +53,7 @@ make_synthdefs = {
         bus_pwm,bus_dco_mod,bus_lfo,detune=0,octave=0,
         on_adsr=0,on_pwm_env=0,
         env_a=0.015,env_d=0.233,env_s=0.5,env_r=1,
-        vcf_res=0,vcf_ratio=1,vcf_env_mod=0,vcf_lfo_mod=0,vcf_kybd=1,vcf_polarity=1,
+        vcf_res=0,vcf_ratio=1,vcf_env_ratio=1,vcf_lfo_mod=1,vcf_kybd=1,vcf_polarity=1,
         gate=1|
         var sqr,saw,sub,noise,sig,pwm_in,pwm,env_gate,env_adsr,env,dco_freq,
         cutoff,lfo_cutoff,env_cutoff;
@@ -73,10 +78,8 @@ make_synthdefs = {
         sig = Mix.ar([sqr,saw,sub!2,noise!2]);
         // VCF: keyboard voltage follower sets fundamental, vcf freq slider sets cutoff freq as a ratio to fundamental
         cutoff = vcf_kybd.linlin(0,1,~vcf_cutoff_min,freq) * vcf_ratio;
-        // Env offset: specs say 10 octaves max
-        env_cutoff = (env_adsr * vcf_env_mod).linexp(0,1,1,120.midiratio);
-        // LFO offset: specs say 6 octaves max
-        lfo_cutoff = (vcf_lfo_mod * In.kr(bus_lfo)).linexp(-1,1,(-72).midiratio,72.midiratio);
+        env_cutoff = env_adsr.linexp(0,1,1,vcf_env_ratio);
+        lfo_cutoff = In.kr(bus_lfo).linexp(-1,1,vcf_lfo_mod.reciprocal,vcf_lfo_mod);
         cutoff = cutoff * env_cutoff.pow(vcf_polarity) * lfo_cutoff;
         cutoff = cutoff * bend_vcf.linlin(0,1,1,bend.midiratio);
         cutoff = cutoff.clip(~vcf_cutoff_min,~vcf_cutoff_max);
@@ -289,11 +292,13 @@ load_patch = {
 make_gui = {
     var make_gui_elements,make_gui_layout,load_defaults,
     //--- After testing, move these factory functions inside make_gui_elements()
-    make_onoff,make_slider,
+    make_onoff,make_slider,shift_linexp,shift_explin,
     button_dim=40,slider_dim=40;
     make_onoff = { Button.new.states_([["off",Color.clear,nil],["on",Color.clear,Color.green]])
         .minHeight_(button_dim).maxWidth_(button_dim) };
     make_slider = { Slider.new.maxWidth_(slider_dim) };
+    shift_linexp = {|n| n.linexp(0,1,0.01,1.01)-0.01};
+    shift_explin = {|n| (n+0.01).explin(0.01,1.01,0,1)};
     //---
     //////////////////
     // A. GUI Elements
@@ -538,7 +543,7 @@ make_gui = {
             element: make_slider.value.
             action_({ |s| ~nkeys.do({|i| ~notes[i].set(\vcf_ratio,
                 ~elements[\vcf_ratio][\v_to_p].value(s.value))}); }),
-            default_p: ~vcf_cutoff_min,
+            default_p: 1,
             p_to_v: {|p| p.explin(1,(~vcf_cutoff_max/~vcf_cutoff_min),0,1)},
             v_to_p: {|v| v.linexp(0,1,1,(~vcf_cutoff_max/~vcf_cutoff_min))}
         ))
@@ -558,6 +563,32 @@ make_gui = {
                 .action_({|s| ~nkeys.do({|i| ~notes[i].set(\vcf_kybd,s.value)}); }),
             default_p: 1
         ))
+        .add(\env_polarity -> make_dict.value(
+            element: make_onoff.value
+            .states_([["-",Color.white,Color.black], ["+",Color.black,nil]])
+            .action_({ |b| ~nkeys.do({|i| ~notes[i].set(\vcf_polarity,
+                ~elements[\env_polarity][\v_to_p].value(b.value))}); }),
+            default_p: 1,
+            p_to_v: {|p| (p+1)/2},
+            v_to_p: {|v| 2*v-1}
+        ))
+        .add(\vcf_env_ratio -> make_dict.value(
+            element: make_slider.value
+            .action_({ |s| ~nkeys.do({|i| ~notes[i].set(\vcf_env_ratio,
+                ~elements[\vcf_env_ratio][\v_to_p].value(s.value))});
+            }),
+            default_p: 1,
+            p_to_v: {|p| p.explin(1,~vcf_ratio_max,0,1)},
+            v_to_p: {|v| v.linexp(0,1,1,~vcf_ratio_max)}
+        ))
+        .add(\vcf_lfo_ratio -> make_dict.value(
+            element: make_slider.value
+            .action_({ |s| ~nkeys.do({|i| ~notes[i].set(\vcf_lfo_mod,
+                ~elements[\vcf_lfo_ratio][\v_to_p].value(s.value))}); }),
+            default_p: 1,
+            p_to_v: {|p| p.explin(1,~lfo_ratio_max,0,1)},
+            v_to_p: {|v| v.linexp(0,1,1,~lfo_ratio_max)}
+        ))
     };
     ~elements.postln;
     load_defaults = {
@@ -575,9 +606,7 @@ make_gui = {
         var make_txt, make_header,
         win_main, win_control, win_env,
         grid_main, grid_control, grid_env,
-        screen_arr, bounds_main, bounds_control, bounds_env, scale=1/3,
-        shift_linexp = {|n| n.linexp(0,1,0.01,1.01)-0.01},
-        invert_exp = {|n| (n+0.01).explin(0.01,1.01,0,1)};
+        screen_arr, bounds_main, bounds_control, bounds_env, scale=1/3;
         // Factory methods for GUI items
         make_header = {
             StaticText.new.background_(Color.black).stringColor_(Color.white).align_(\center).font_(Font.new.pointSize_(18));
@@ -614,17 +643,9 @@ make_gui = {
             // VCF
             [nil,make_txt.value.string_("FREQ"), ~elements[\vcf_ratio][\element]],
             [nil,make_txt.value.string_("RES"), ~elements[\resonance][\element]],
-            [nil,make_txt.value,make_onoff.value.states_([
-                ["-",Color.white,Color.black], ["+",Color.black,nil]
-            ]).value_(1).action_({ |b|
-                ~nkeys.do({|i| ~notes[i].set(\vcf_polarity,2*b.value-1)});
-            })],
-            [nil,make_txt.value.string_("ENV"), make_slider.value(0).action_({ |s|
-                ~nkeys.do({|i| ~notes[i].set(\vcf_env_mod,shift_linexp.value(s.value))});
-            })],
-            [nil,make_txt.value.string_("LFO"), make_slider.value(0).action_({ |s|
-                ~nkeys.do({|i| ~notes[i].set(\vcf_lfo_mod,shift_linexp.value(s.value))});
-            })],
+            [nil,make_txt.value, ~elements[\env_polarity][\element]],
+            [nil,make_txt.value.string_("ENV"), ~elements[\vcf_env_ratio][\element]],
+            [nil,make_txt.value.string_("LFO"), ~elements[\vcf_lfo_ratio][\element]],
             [nil,make_txt.value.string_("KYBD"), ~elements[\kybd_follow_frac][\element]]
         );
         // (add headers)
