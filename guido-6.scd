@@ -33,13 +33,15 @@
 (
 // FUNCTION DECLARATIONS
 var make_synthdefs, make_synths, make_playmodes, make_gui, load_defaults, open_default_memory_file, main;
-// GLOBAL DECLARATIONS
-~default_memory_filename="guido-6_patch_memory.tsv".resolveRelative;
 ~memory_filename;
 ~open_memory_dialog;
 ~open_memory_file;
 ~save_patch;
 ~load_patch;
+// GLOBAL DECLARATIONS
+~default_memory_filename="guido-6_patch_memory.tsv".resolveRelative;
+~tmp_filename="tmp.tsv".resolveRelative;
+~default_text = "default_sin";
 
 ///////////////
 // 1. SYNTHDEFS
@@ -304,11 +306,14 @@ make_playmodes = {
 make_gui = {
     var make_gui_elements,make_gui_layout,
     //--- After testing, move these factory functions inside make_gui_elements()
-    make_onoff,make_slider,
+    make_onoff,make_slider,make_popup,
     button_dim=40,slider_dim=40;
     make_onoff = { Button.new.states_([["off",Color.clear,nil],["on",Color.clear,Color.green]])
         .minHeight_(button_dim).maxWidth_(button_dim) };
     make_slider = { Slider.new.maxWidth_(slider_dim) };
+    make_popup = {|name,w=200,h=50|
+                var screen = Window.screenBounds.asArray;
+                Window.new(name,bounds:Rect((screen[2]-w)/2,(screen[3]+h)/2,w,h)).front;};
     //---
     //////////////////
     // A. GUI Elements
@@ -421,7 +426,7 @@ make_gui = {
         .add(\lfo_delay_time -> make_dict.value(
             element: make_slider.value
             .action_({ |s|
-                if(~lfo_auto==0, {~lfo.set(~elements[\lfo_delay_time][\v_to_p].value(s.value))});
+                if(~lfo_auto==0, {~lfo.set(\delay,~elements[\lfo_delay_time][\v_to_p].value(s.value))});
             }),
             // delay time = [0,2.5] sec
             default_p: 1,
@@ -705,7 +710,7 @@ make_gui = {
         .add(\chorus_i -> make_dict.value(
             element: make_onoff.value
             .action_({ |b|
-                ~elements[\chorus_ii][\element].value_(0);
+                if(b.value==1,{~elements[\chorus_ii][\element].value_(0)});
                 ~mixer.set(
                     \chorus_level, b.value * 0.25,
                     \chorus_rate, b.value * 0.25,
@@ -717,7 +722,7 @@ make_gui = {
         .add(\chorus_ii -> make_dict.value(
             element: make_onoff.value
             .action_({ |b|
-                ~elements[\chorus_i][\element].value_(0);
+                if(b.value==1,{~elements[\chorus_i][\element].value_(0)});
                 ~mixer.set(
                     \chorus_level, b.value * 0.5,
                     \chorus_rate, b.value * 0.5,
@@ -742,38 +747,72 @@ make_gui = {
             .states_([["",Color.black,nil]])
             .action_({|b|
                 ~open_memory_dialog.value;
-                b.string_(~memory_filename);
+                b.string_(PathName.new(~memory_filename).fileName);
             });
         ~memory_menu = PopUpMenu.new
             .action_({|pop|
                 ~load_patch.value(pop.item);
+                if(pop.item==~default_text,{
+                    ~memory_update_button.value_(0);
+                    ~memory_delete_button.value_(0);
+                },{
+                    ~memory_update_button.value_(1);
+                    ~memory_delete_button.value_(1);
+                });
             });
         ~memory_save_button = Button.new
-            .states_([["NEW",Color.black,nil]])
-            .action_({|b|
-                var win,name_text,static,ok_button;
-                win = Window.new.front;
-                static = StaticText.new(win).string_("Enter patch name:");
-                name_text = TextField.new(win);
-                ok_button = Button.new(win)
-                   .states_([["OK",Color.black,nil]])
-                   .action_({|b|
-                       ~save_patch.value(name_text.value);
-                       ~memory_menu.items_(~read_patch_names.value);
-                       ~memory_menu.value_(~memory_menu.items.size-1);
-                       b.parent.close;
-                   });
-            win.layout = HLayout(static,name_text,ok_button);
+        .states_([["NEW",Color.black,nil]])
+        .action_({|b|
+            var win,name_text,cancel_button,ok_button;
+            win = make_popup.value("Enter patch name:",w:300,h:100);
+            name_text = TextField.new(win);
+            cancel_button = Button.new(win)
+                .states_([["Cancel",Color.black,nil]])
+                .action_({|b| b.parent.close;});
+            ok_button = Button.new(win)
+                .states_([["OK",Color.black,nil]])
+                .action_({|b|
+                ~save_patch.value(~memory_filename,name_text.value);
+                ~memory_menu.items_(~read_patch_names.value);
+                ~memory_menu.value_(~memory_menu.items.size-1);
+                ~memory_update_button.value_(1);
+                ~memory_delete_button.value_(1);
+                b.parent.close;
             });
-         ~memory_update_button = Button.new
-            .states_([["UPDATE",Color.black,nil]])
-            .action_({|b|
-            ~save_patch.value(~memory_menu.item,mode:"r+");
+            win.layout = VLayout(name_text,HLayout(cancel_button,ok_button));
         });
-         ~memory_delete_button = Button.new
-            .states_([["DELETE",Color.black,nil]])
-            .action_({|b|
-                postln("Need to implement delete");
+        ~memory_update_button = Button.new
+        .states_([["UPDATE",Color.gray,nil],["UPDATE",Color.black,nil]])
+        .action_({|b|
+            if(~memory_menu.item==~default_text,{
+                b.value_(0);
+            },{
+                b.value_(1);
+                ~modify_patch.value(~memory_menu.item);
+            });
+        });
+        ~memory_delete_button = Button.new
+        .states_([["DELETE",Color.gray,nil],["DELETE",Color.black,nil]])
+        .action_({|b|
+            var win,static,cancel_button,ok_button;
+            if(~memory_menu.item==~default_text,{
+                b.value_(0);
+            },{
+                b.value_(1);
+                win = make_popup.value("Delete "++~memory_menu.item++"?");
+                cancel_button = Button.new(win)
+                    .states_([["Cancel",Color.black,nil]])
+                    .action_({|b| b.parent.close});
+                ok_button = Button.new(win)
+                    .states_([["OK",Color.black,nil]])
+                    .action_({|b|
+                    ~modify_patch.value(~memory_menu.item, delete:true);
+                    ~memory_menu.items_(~read_patch_names.value);
+                    ~memory_menu.valueAction_(~memory_menu.items.size-1);
+                    b.parent.close;
+                });
+                win.layout = HLayout(cancel_button,ok_button);
+            });
         });
         postln("\tBuilt MEMORY...");
     };
@@ -851,11 +890,11 @@ make_gui = {
         // LAYOUT: MEMORY
         //////////////////
         grid_memory = GridLayout.columns(
-            [~memory_file_button,~memory_menu,HLayout(
+            [nil,~memory_file_button,~memory_menu,HLayout(
                 ~memory_save_button,~memory_update_button,~memory_delete_button)]
         );
         // (add headers)
-        //grid_memory.addSpanning(make_header.value.string_("MEM"),0,4,1,1);
+        grid_memory.addSpanning(make_header.value.string_(""),0,0,1,1);
         //////////////////
         // LAYOUT: ENV+FX
         //////////////////
@@ -914,7 +953,7 @@ open_default_memory_file = {
         postln("Creating "++~default_memory_filename++" ...");
         File.use(~default_memory_filename,"a+",{|f|
             ~memory_filename = ~default_memory_filename;
-            ~save_patch.value("default_sin");
+            ~save_patch.value(~memory_filename,~default_text);
             };
         );
     });
@@ -938,28 +977,11 @@ open_default_memory_file = {
         tab_array.reject({|row| row[0]==""}).collect({|a| a[0]})
     });
 };
-~save_patch = {|patch_name,mode="a+"|
+~save_patch = {|filename,patch_name|
     if(patch_name.isNil,{
-        "Patch name cannot be empty."
+        "Patch name cannot be empty.".postln;
     },{
-        File.use(~memory_filename,mode,{|f|
-            var line="";
-            // By default, append new patch to end of file
-            if(mode=="r+",{
-                postln("Updating "++patch_name++"...");
-                //Seek until patch found, then overwrite
-                f.seek(0,origin:0);
-                File.fileSize(~memory_filename).postln;
-                while({f.pos<File.fileSize(~memory_filename)
-                    && not(line.beginsWith(patch_name))},{
-                    postln("\t"++"pos: "++f.pos++"\t line: "++line);
-                    //f.seek(line.size,origin:1);
-                    line = f.getLine;
-                });
-            });
-            f.pos = f.pos - (line.size + 1);
-            postln("Writing at pos: "++f.pos++" of "++File.fileSize(~memory_filename));
-            f.seek(f.pos,origin:0);
+        File.use(filename,"a",{|f|
             f.write(patch_name++"\t\t\n");
             ~elements.keysValuesDo({|name,dict|
                 var param;
@@ -974,6 +996,41 @@ open_default_memory_file = {
             });
         });
     });
+};
+~modify_patch = {|patch_name,delete=false|
+    var line = "";
+    var f_dest;
+    var skip = false;
+    f_dest = File.open(~tmp_filename,"w");
+    // By default, append new patch to end of file
+    postln("Updating "++patch_name++"...");
+    File.use(~memory_filename,"r",{|f_src|
+        while({f_src.pos<f_src.length},{
+            //postln("\t"++"pos: "++f_src.pos++"\t line: "++line);
+            line = f_src.getLine;
+            if(line.beginsWith(patch_name),{
+                if(delete.not,{
+                    // For updating, append new parameter set using save_patch
+                    f_dest.close;
+                    ~save_patch.value(~tmp_filename,patch_name);
+                    f_dest = File.open(~tmp_filename,"a");
+                });
+                skip = true;
+            });
+            if(skip,{
+                // Stop skipping at next patch header
+                if(not(line.beginsWith(patch_name) || line.beginsWith("\t")),{skip = false;});
+            });
+            if(skip.not,{
+                f_dest.write(line++"\n");
+            });
+        });
+    });
+    f_dest.close;
+    // Move tmp file to memory file
+    File.delete(~memory_filename);
+    File.copy(~tmp_filename,~memory_filename);
+    File.delete(~tmp_filename);
 };
 ~load_patch = {|patch_name|
     if(File.existsCaseSensitive(~memory_filename),{
