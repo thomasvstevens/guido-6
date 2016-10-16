@@ -331,8 +331,8 @@ make_gui = {
             (element:element,default_p:default_p,p_to_v:p_to_v,v_to_p:v_to_p).asDict };
         postln("Building ~elements...");
         ~elements = Dictionary();
-        //////
-        // ARP
+        /*//////
+        // ARP (broken)
         //////
         ~elements.add(\key_transpose -> make_dict.value(
             element: PopUpMenu.new
@@ -373,7 +373,7 @@ make_gui = {
                 ~mode_switch.value;
                 if(b.value==0,{
                     ~on_arp = 0;
-                    ~elements[\hold_button][\element].value_(0);
+                    ~hold_button.value_(0);
                     ~mode_switch.value;
                     if(~on_mono==1,{~mode_mono.value},{~mode_poly.value});
                 },{
@@ -409,7 +409,7 @@ make_gui = {
             p_to_v: {|p| p.linlin(1.5,50,0,1)},
             v_to_p: {|v| v.linlin(0,1,1.5,50)}
         ));
-        postln("\tBuilt ARP...");
+        postln("\tBuilt ARP...");*/
         //////
         // LFO
         //////
@@ -452,7 +452,7 @@ make_gui = {
                 ~lfo.set(\gate,-1);
                 ~elements[\lfo_trig_button][\element].valueAction_(0);
                 if(~on_arp==1,{
-                    ~elements[\hold_button][\element].value_(0);
+                    ~hold_button.value_(0);
                     ~mode_switch.value;
                     ~mode_arp.value;
                 });
@@ -630,7 +630,7 @@ make_gui = {
             .action_({ |b|
                 ~notes[0].set(\mslew,16384);
                 ~mode_switch.value;
-                ~elements[\hold_button][\element].value_(0);
+                ~hold_button.value_(0);
                 if(b.value==0,{
                     ~on_mono = 0;
                     if(~on_arp==1,{
@@ -836,13 +836,61 @@ make_gui = {
         // LAYOUT: MAIN
         ///////////////
         grid_main = GridLayout.columns(
-            // ARP
+        //////
+        // ARP (from stash)
+        //////
+        [nil,make_txt.value.string_("KEY"), PopUpMenu.new.items_(
+            Array.fill(13,{|i| (7-i).asString}).put(7,"");
+        ).value_(7).action_({ |p|
+            ~nkeys.do({|i| ~notes[i].set(\mtranspose,7-p.value)});
+        })],
+        [nil,make_txt.value.string_("HOLD"), ~hold_button = make_onoff.value.action_({ |b|
+            if(b.value==0,{
+                ~mode_switch.value;
+                if(~on_arp==1,{
+                    ~mode_arp.value;
+                },{
+                    if(~on_mono==1,{
+                        ~mode_mono.value;
+                    },{
+                        ~mode_poly.value;
+                    });
+                });
+            },{
+                ~noteoff.free;
+            });
+        })],
+        [nil,make_txt.value.string_("ON"), make_onoff.value.action_({ |b|
+            ~mode_switch.value;
+            if(b.value==0,{
+                ~on_arp = 0;
+                ~hold_button.value_(0);
+                ~mode_switch.value;
+                if(~on_mono==1,{~mode_mono.value},{~mode_poly.value});
+            },{
+                ~mode_arp.value;
+                ~on_arp = 1;
+            });
+        })],
+        [nil,make_txt.value.string_("MODE"), PopUpMenu.new.items_(
+            ["UP","UPDOWN","DOWN","DOWNUP"]
+            ).value_(2).action_({ |p|
+            ~polarity=p.item;
+        })],
+        [nil,make_txt.value.string_("RANGE"),PopUpMenu.new.items_(["1","2","3"]).value_(0).action_({ |p|
+            ~octaves = p.value + 1;
+        })],
+        // arp rate = [1.5,50] Hz
+        [nil,make_txt.value.string_("RATE"), make_slider.value(0.134).action_({ |s|
+            TempoClock.default.tempo_(s.value.linlin(0,1,1.5,50));
+        })],
+            /*            // ARP (rewrite)
             [nil, make_txt.value.string_("KEY"), ~elements[\key_transpose][\element]],
             [nil, make_txt.value.string_("HOLD"), ~elements[\hold_button][\element]],
             [nil,make_txt.value.string_("ON"), ~elements[\arp_button][\element]],
             [nil,make_txt.value.string_("MODE"), ~elements[\arp_polarity][\element]],
             [nil,make_txt.value.string_("RANGE"),~elements[\arp_range][\element]],
-            [nil,make_txt.value.string_("RATE"), ~elements[\arp_rate][\element]],
+            [nil,make_txt.value.string_("RATE"), ~elements[\arp_rate][\element]],*/
             // LFO
             [nil,make_txt.value.string_("RATE"), ~elements[\lfo_rate][\element]],
             [nil,make_txt.value.string_("DELAY\nTIME"), ~elements[\lfo_delay_time][\element]],
