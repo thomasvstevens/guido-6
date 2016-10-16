@@ -32,7 +32,14 @@
 
 (
 // FUNCTION DECLARATIONS
-var make_synthdefs,make_synths,make_playmodes,make_gui,load_defaults,load_patch,main;
+var make_synthdefs, make_synths, make_playmodes, make_gui, load_defaults, open_default_memory_file, main;
+// GLOBAL DECLARATIONS
+~default_memory_filename="guido-6_patch_memory.tsv".resolveRelative;
+~memory_filename;
+~open_memory_dialog;
+~open_memory_file;
+~save_patch;
+~load_patch;
 
 ///////////////
 // 1. SYNTHDEFS
@@ -290,17 +297,12 @@ make_playmodes = {
     ~on_mono = 0;
     TempoClock.default.tempo_(8);
 };
-////////////
-// 5. MEMORY
-////////////
-load_patch = {
-};
 
 /////////
 // 4. GUI
 /////////
 make_gui = {
-    var make_gui_elements,make_gui_layout,load_defaults,
+    var make_gui_elements,make_gui_layout,
     //--- After testing, move these factory functions inside make_gui_elements()
     make_onoff,make_slider,
     button_dim=40,slider_dim=40;
@@ -506,7 +508,7 @@ make_gui = {
         .add(\square_button -> make_dict.value(
             element: make_onoff.value
             .action_({ |b| ~nkeys.do({|i| ~notes[i].set(\on_sqr,b.value)}); }),
-            default_p: 0
+            default_p: 1
         ))
         .add(\saw_button -> make_dict.value(
             element: make_onoff.value
@@ -703,7 +705,7 @@ make_gui = {
         .add(\chorus_i -> make_dict.value(
             element: make_onoff.value
             .action_({ |b|
-                //~elements[\chorus_ii][\element].value_(0);
+                ~elements[\chorus_ii][\element].value_(0);
                 ~mixer.set(
                     \chorus_level, b.value * 0.25,
                     \chorus_rate, b.value * 0.25,
@@ -733,23 +735,56 @@ make_gui = {
             v_to_p: {|v| v.lincurve(0,1,0,0.5,2)}
         ));
         postln("\tBuilt ENV+FX...");
-    };
-    // Load Default Parameter Set
-    load_defaults = {
-        ~elements.keysValuesDo({|name,dict|
-            postln("\t"++name);
-            dict[\element].valueAction_(
-                dict[\p_to_v].value(dict[\default_p]);
-            );
+        /////////
+        // MEMORY
+        /////////
+        ~memory_file_button = Button.new
+            .states_([["",Color.black,nil]])
+            .action_({|b|
+                ~open_memory_dialog.value;
+                b.string_(~memory_filename);
+            });
+        ~memory_menu = PopUpMenu.new
+            .action_({|pop|
+                ~load_patch.value(pop.item);
+            });
+        ~memory_save_button = Button.new
+            .states_([["NEW",Color.black,nil]])
+            .action_({|b|
+                var win,name_text,static,ok_button;
+                win = Window.new.front;
+                static = StaticText.new(win).string_("Enter patch name:");
+                name_text = TextField.new(win);
+                ok_button = Button.new(win)
+                   .states_([["OK",Color.black,nil]])
+                   .action_({|b|
+                       ~save_patch.value(name_text.value);
+                       ~memory_menu.items_(~read_patch_names.value);
+                       ~memory_menu.value_(~memory_menu.items.size-1);
+                       b.parent.close;
+                   });
+            win.layout = HLayout(static,name_text,ok_button);
+            });
+         ~memory_update_button = Button.new
+            .states_([["UPDATE",Color.black,nil]])
+            .action_({|b|
+            ~save_patch.value(~memory_menu.item,mode:"r+");
         });
+         ~memory_delete_button = Button.new
+            .states_([["DELETE",Color.black,nil]])
+            .action_({|b|
+                postln("Need to implement delete");
+        });
+        postln("\tBuilt MEMORY...");
     };
+
     ////////////////
     // B. GUI Layout
     ////////////////
     make_gui_layout = {
         var make_txt, make_header,
         win_main, win_control, win_env,
-        grid_main, grid_control, grid_env,
+        grid_main, grid_control, grid_memory, grid_env,
         screen_arr, bounds_main, bounds_control, bounds_env, scale=1/3;
         // Factory methods for GUI items
         make_header = {
@@ -807,11 +842,20 @@ make_gui = {
             [nil,make_txt.value.string_("LFO TRIG"), ~elements[\lfo_trig_button][\element]],
             [nil,make_txt.value.string_("OCTAVE"), ~elements[\octave][\element]],
             [nil,make_txt.value.string_("VOICES"), ~elements[\voices][\element]],
-            [nil,make_txt.value.string_("VOLUME"), ~elements[\volume][\element]]
+            [nil,make_txt.value.string_("VOLUME"), ~elements[\volume][\element]],
         );
         // (add headers)
         grid_control.addSpanning(make_header.value.string_("BEND"),0,0,1,2);
-        grid_control.addSpanning(make_header.value.string_(""),0,2,1,3);
+        grid_control.addSpanning(make_header.value.string_(""),0,2,1,4);
+        //////////////////
+        // LAYOUT: MEMORY
+        //////////////////
+        grid_memory = GridLayout.columns(
+            [~memory_file_button,~memory_menu,HLayout(
+                ~memory_save_button,~memory_update_button,~memory_delete_button)]
+        );
+        // (add headers)
+        //grid_memory.addSpanning(make_header.value.string_("MEM"),0,4,1,1);
         //////////////////
         // LAYOUT: ENV+FX
         //////////////////
@@ -837,27 +881,144 @@ make_gui = {
                 grid_main,
                 HLayout(
                     grid_control,
-                    View(),
+                    grid_memory,
                     grid_env
                 )
             )
         ).front;
     };
+    "Making elements.".postln;
     make_gui_elements.value;
-    "Made elements.".postln;
-    "Loading defaults...".postln;
-    load_defaults.value;
+    "\tDone.".postln;
     "Making layout...".postln;
     make_gui_layout.value;
-    "Made layout.".postln;
+    "\tDone.".postln;
+};
+
+////////////
+// 5. MEMORY
+////////////
+// Load default parameter set from element dictionary
+load_defaults = {
+    ~elements.keysValuesDo({|name,dict|
+        dict[\element].valueAction_(
+            dict[\p_to_v].value(dict[\default_p]);
+        );
+    });
+};
+open_default_memory_file = {
+    if(File.existsCaseSensitive(~default_memory_filename),{
+        postln("Using "++~default_memory_filename++" ...");
+        ~memory_filename = ~default_memory_filename;
+    },{
+        postln("Creating "++~default_memory_filename++" ...");
+        File.use(~default_memory_filename,"a+",{|f|
+            ~memory_filename = ~default_memory_filename;
+            ~save_patch.value("default_sin");
+            };
+        );
+    });
+    ~open_memory_file.value(~memory_filename);
+};
+~open_memory_dialog = {
+    Dialog.openPanel(~open_memory_file);
+};
+~open_memory_file = {|filename|
+    postln("Opening memory file "++filename++" ...");
+    ~memory_filename = filename;
+    ~memory_file_button.string_(PathName.new(~memory_filename).fileName);
+    postln("Setting Menu ...");
+    ~memory_menu.items_(~read_patch_names.value(~memory_filename));
+};
+~read_patch_names = {
+    File.use(~memory_filename,"r",{|f|
+        var tab_array = TabFileReader.read(~memory_filename);
+        postln("Reading patch names...");
+        //Patch names are in first column. Parameters start in 2nd column.
+        tab_array.reject({|row| row[0]==""}).collect({|a| a[0]})
+    });
+};
+~save_patch = {|patch_name,mode="a+"|
+    if(patch_name.isNil,{
+        "Patch name cannot be empty."
+    },{
+        File.use(~memory_filename,mode,{|f|
+            var line="";
+            // By default, append new patch to end of file
+            if(mode=="r+",{
+                postln("Updating "++patch_name++"...");
+                //Seek until patch found, then overwrite
+                f.seek(0,origin:0);
+                File.fileSize(~memory_filename).postln;
+                while({f.pos<File.fileSize(~memory_filename)
+                    && not(line.beginsWith(patch_name))},{
+                    postln("\t"++"pos: "++f.pos++"\t line: "++line);
+                    //f.seek(line.size,origin:1);
+                    line = f.getLine;
+                });
+            });
+            f.pos = f.pos - (line.size + 1);
+            postln("Writing at pos: "++f.pos++" of "++File.fileSize(~memory_filename));
+            f.seek(f.pos,origin:0);
+            f.write(patch_name++"\t\t\n");
+            ~elements.keysValuesDo({|name,dict|
+                var param;
+                f.write("\t"++name++"\t");
+                param = dict[\v_to_p].value(dict[\element].value);
+                switch(param.class,
+                    Integer, {f.write(param.asString++"\t"++"Integer")},
+                    Float, {f.write(param.asStringPrec(6)++"\t"++"Float")},
+                    String, {f.write(param++"\t"++"String")}
+                );
+                f.write("\n");
+            });
+        });
+    });
+};
+~load_patch = {|patch_name|
+    if(File.existsCaseSensitive(~memory_filename),{
+        File.use(~memory_filename,"r",{|f|
+            var tab_array = TabFileReader.read(~memory_filename);
+            var r=0,found=false,loaded=false,row;
+            var name,param,type;
+            postln("Loading "++patch_name++" from "++~memory_filename++" ...");
+            while({loaded.not && (r<tab_array.size)},{
+                //postln("\t"++r.asString++" "++loaded.asString++" "++found.asString);
+                row = tab_array[r];
+                if(found && loaded.not,{
+                    if(row[0]=="",{
+                        name = row[1].asSymbol;
+                        param = row[2];
+                        type = row[3];
+                        switch(type,
+                            "Float",{param = param.asFloat},
+                            "Integer",{param = param.asInteger}
+                        );
+                        //postln("\t\t"++name.asString++" "++param.asString++" "++type.asString);
+                        ~elements[name][\element].valueAction_(
+                            ~elements[name][\p_to_v].value(param));
+                    },{
+                        loaded = true;
+                    });
+                });
+                if(row[0]==patch_name,{found=true;});
+                r=r+1;
+            });
+        });
+    },{
+        "Memory file does not exist.".postln;
+    });
 };
 
 main = {
+    "Making backend...".postln;
     make_synthdefs.value;
     make_synths.value;
     make_playmodes.value;
-    "Made backend.".postln;
+    "\tDone.".postln;
     make_gui.value;
+    load_defaults.value;
+    open_default_memory_file.value;
 };
 
 main.value;
