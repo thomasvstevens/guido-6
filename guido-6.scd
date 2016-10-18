@@ -166,7 +166,10 @@ make_playmodes = {
         ~player.stop;
         ~noteon.free;
         ~noteoff.free;
-        ~notes.do({|note| note.set(\gate,0)});
+        // For releasing gate on stuck synths (sputters if sudden mode change).
+        Task({50.do({
+            ~notes.do({|note| note.set(\gate,0)});
+            0.01.wait;});},SystemClock).start;
     };
     // POLYPHONIC
     ~mode_poly = {
@@ -265,7 +268,7 @@ make_playmodes = {
         });
         ~noteoff = MIDIFunc.noteOff({|vel, num|
             last_num = pressed.remove(num);
-            // Leave the player running to allow all gates to release. Reinit rest pattern
+            // Leave the player running with last note to allow all gates to release.
             if(pressed.isEmpty and:{~player.isPlaying}) {
                 arppat.source = Pseq([last_num],inf);
                 gatepat.source = Pn(0);
@@ -276,21 +279,22 @@ make_playmodes = {
         });
         setArp = {|list|
             var sgn,origlist=list;
-            if(~octaves>1) {
-                if(~polarity.beginsWith("UP")) {
+            if(~octaves>1,{
+                if(~polarity.beginsWith("UP"),{
                     (~octaves-1).do({|i| list = list ++ (origlist+(12*(i+1))) });
-                } {
+                },{
                     (~octaves-1).do({|i| list = (origlist-(12*(i+1))) ++ list });
-                }
-            };
+                });
+            });
             switch(~polarity,
-                "UP", {list = list;},
+                // {list;} case leads to crash when all notes off. All cases must return a new list. stutter(1) returns a copy.
+                "UP", {list = list.stutter(1);},
                 "DOWN", {list = list.reverse;},
                 // Mirror1 will return empty list if only 1 item
-                "UPDOWN", {if(list.size>1,{list = list.mirror1;},{list});},
-                "DOWNUP", {if(list.size>1,{list = list.reverse.mirror1;},{list});}
+                "UPDOWN", {if(list.size>1, {list = list.mirror1;}, {list = list.stutter(1)});},
+                "DOWNUP", {if(list.size>1, {list = list.reverse.mirror1;}, {list = list.stutter(1)});}
             );
-            arppat.source = Pseq(list,inf)
+            arppat.source = Pseq(list,inf);
         };
     };
     // Default Mode: polyphonic (no arp)
@@ -329,7 +333,7 @@ make_gui = {
             if(p_to_v.isNil,{p_to_v={|p| p}});
             if(v_to_p.isNil,{v_to_p={|v| v}});
             (element:element,default_p:default_p,p_to_v:p_to_v,v_to_p:v_to_p).asDict };
-        postln("Building ~elements...");
+        postln("Building GUI elements...");
         ~elements = Dictionary();
         //////
         // ARP
@@ -347,8 +351,7 @@ make_gui = {
         ))
         .add(\hold_button -> make_dict.value(
             element: make_onoff.value
-            // Use value_(0) to turn off HOLD (esp. during ARP).
-            // Using valueAction_ will crash Pbind with empty list.
+            // Use value_(0) to turn off HOLD.
             .action_({ |b|
                 if(b.value==0,{
                     ~mode_switch.value;
@@ -1006,7 +1009,6 @@ open_default_memory_file = {
     postln("Updating "++patch_name++"...");
     File.use(~memory_filename,"r",{|f_src|
         while({f_src.pos<f_src.length},{
-            //postln("\t"++"pos: "++f_src.pos++"\t line: "++line);
             line = f_src.getLine;
             if(line.beginsWith(patch_name),{
                 if(delete.not,{
@@ -1040,7 +1042,6 @@ open_default_memory_file = {
             var name,param,type;
             postln("Loading "++patch_name++" from "++~memory_filename++" ...");
             while({loaded.not && (r<tab_array.size)},{
-                //postln("\t"++r.asString++" "++loaded.asString++" "++found.asString);
                 row = tab_array[r];
                 if(found && loaded.not,{
                     if(row[0]=="",{
@@ -1051,7 +1052,6 @@ open_default_memory_file = {
                             "Float",{param = param.asFloat},
                             "Integer",{param = param.asInteger}
                         );
-                        //postln("\t\t"++name.asString++" "++param.asString++" "++type.asString);
                         ~elements[name][\element].valueAction_(
                             ~elements[name][\p_to_v].value(param));
                     },{
