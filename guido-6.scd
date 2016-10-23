@@ -93,7 +93,7 @@ make_synthdefs = {
         // Mix all sources to stereo
         sig = Mix.ar([sqr,saw,sub!2,noise!2]);
         // VCF: keyboard voltage follower sets fundamental, vcf freq slider sets cutoff freq as a ratio to fundamental
-        cutoff = vcf_kybd.linlin(0,1,~vcf_cutoff_min,freq) * vcf_ratio;
+        cutoff = vcf_kybd.linexp(0,1,~vcf_cutoff_min,freq) * vcf_ratio;
         env_cutoff = env_adsr.linexp(0,1,1,vcf_env_ratio);
         lfo_cutoff = In.kr(bus_lfo).linexp(-1,1,vcf_lfo_mod.reciprocal,vcf_lfo_mod);
         cutoff = cutoff * env_cutoff.pow(vcf_polarity) * lfo_cutoff;
@@ -490,7 +490,11 @@ make_gui = {
         .add(\pulse_width -> make_dict.value(
             element: make_slider.value
             .action_({ |s| ~bus_pwm_manual.value_(s.value); }),
-            default_p: 0
+            // PWM value is [0,1], but gets rescaled to [0.5,1] in SynthDef.
+            // PWM LFO is [-1,1], rescaled to [0,1].
+            default_p: 0.5,
+            p_to_v: {|p| p.linlin(0.5,1,0,1)},
+            v_to_p: {|v| v.linlin(0,1,0.5,1)}
         ))
         .add(\pwm_bus_menu -> make_dict.value(
             element: PopUpMenu.new
