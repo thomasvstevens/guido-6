@@ -163,13 +163,18 @@ make_playmodes = {
     ~player;
     // Convenience function to reset player, synths, and MIDIFuncs when switching modes
     ~mode_switch = {
-        ~player.stop;
         ~noteon.free;
         ~noteoff.free;
-        // For releasing gate on stuck synths (sputters if sudden mode change).
-        Task({50.do({
+        // For releasing gate on stuck synths.
+        if(~on_arp==1,{
+            ~player.stop;
+            Task({50.do({
+                ~notes.do({|note| note.set(\gate,0)});
+                0.01.wait;});
+                },SystemClock).start;
+        },{
             ~notes.do({|note| note.set(\gate,0)});
-            0.01.wait;});},SystemClock).start;
+        });
     };
     // POLYPHONIC
     ~mode_poly = {
@@ -375,9 +380,9 @@ make_gui = {
             .action_({|b|
                 ~mode_switch.value;
                 if(b.value==0,{
+                    ~mode_switch.value;
                     ~on_arp = 0;
                     ~elements[\hold_button][\element].value_(0);
-                    ~mode_switch.value;
                     if(~on_mono==1,{~mode_mono.value},{~mode_poly.value});
                 },{
                     ~mode_arp.value;
@@ -1010,7 +1015,7 @@ open_default_memory_file = {
     File.use(~memory_filename,"r",{|f_src|
         while({f_src.pos<f_src.length},{
             line = f_src.getLine;
-            if(line.beginsWith(patch_name),{
+            if(line.beginsWith(patch_name++"\t"),{
                 if(delete.not,{
                     // For updating, append new parameter set using save_patch
                     f_dest.close;
@@ -1021,7 +1026,7 @@ open_default_memory_file = {
             });
             if(skip,{
                 // Stop skipping at next patch header
-                if(not(line.beginsWith(patch_name) || line.beginsWith("\t")),{skip = false;});
+                if(not(line.beginsWith(patch_name++"\t") || line.beginsWith("\t")),{skip = false;});
             });
             if(skip.not,{
                 f_dest.write(line++"\n");
