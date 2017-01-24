@@ -247,20 +247,40 @@ make_playmodes = {
         });
         if(~lfo_auto==1,{
             // Set gate simultaneously to LFO and notes
-            id_pat = Pstutter(2,Pseq(Array.fill(n_notes, {|i| [~notes[i],~lfo]} ),inf));
+            if(~polarity=="REPEAT",{
+                // Set all gates simultaneously
+                id_pat = Pstutter(2,Pn(~notes++[~lfo],inf));
+            },{
+                id_pat = Pstutter(2,Pseq(Array.fill(n_notes, {|i| [~notes[i],~lfo]} ),inf));
+            });
         },{
             // Gate notes only, maintain manual LFO
-            id_pat = Pstutter(2,Pseq(Array.fill(n_notes, {|i| ~notes[i]} ),inf));
+            if(~polarity=="REPEAT",{
+                    id_pat = Pstutter(2,Pn(~notes,inf));
+                },{
+                    id_pat = Pstutter(2,Pseq(Array.fill(n_notes, {|i| ~notes[i]} ),inf));
+                });
         });
-        pattern = Pbind(
-            \type, \set,
-            \id, id_pat,
-            \args, #[\freq, \mslew, \gate],
-            \freq, Pstutter(2,arppat.midicps),
-            \mslew, Pstutter(2,slewpat),
-            \gate, Ppatlace([gatepat,Pn(0)],inf),
-            \dur, 1
-        );
+        if(~polarity=="REPEAT",{
+            pattern = Pbind(
+                \type, \set,
+                \id, id_pat,
+                \args, #[\freq, \gate],
+                \freq, Pstutter(2,arppat.midicps),
+                \gate, Ppatlace([gatepat,Pn(0)],inf),
+                \dur, 1
+            );
+        },{
+            pattern = Pbind(
+                \type, \set,
+                \id, id_pat,
+                \args, #[\freq, \mslew, \gate],
+                \freq, Pstutter(2,arppat.midicps),
+                \mslew, Pstutter(2,slewpat),
+                \gate, Ppatlace([gatepat,Pn(0)],inf),
+                \dur, 1
+            );
+        });
         ~noteon = MIDIFunc.noteOn({|vel, num|
             pressed.add(num);
             setArp.value(pressed);
@@ -283,23 +303,28 @@ make_playmodes = {
             };
         });
         setArp = {|list|
-            var sgn,origlist=list;
-            if(~octaves>1,{
-                if(~polarity.beginsWith("UP"),{
-                    (~octaves-1).do({|i| list = list ++ (origlist+(12*(i+1))) });
-                },{
-                    (~octaves-1).do({|i| list = (origlist-(12*(i+1))) ++ list });
+            var sgn,arr,origlist=list;
+            if(~polarity=="REPEAT",{
+                arr = Array.newFrom(list);
+                arppat.source = Pn(arr,inf);
+            },{
+                if(~octaves>1,{
+                    if(~polarity.beginsWith("UP"),{
+                        (~octaves-1).do({|i| list = list ++ (origlist+(12*(i+1))) });
+                    },{
+                        (~octaves-1).do({|i| list = (origlist-(12*(i+1))) ++ list });
+                    });
                 });
+                switch(~polarity,
+                    // {list;} case leads to crash when all notes off. All cases must return a new list. stutter(1) returns a copy.
+                    "UP", {list = list.stutter(1);},
+                    "DOWN", {list = list.reverse;},
+                    // Mirror1 will return empty list if only 1 item
+                    "UPDOWN", {if(list.size>1, {list = list.mirror1;}, {list = list.stutter(1)});},
+                    "DOWNUP", {if(list.size>1, {list = list.reverse.mirror1;}, {list = list.stutter(1)});}
+                );
+                arppat.source = Pseq(list,inf);
             });
-            switch(~polarity,
-                // {list;} case leads to crash when all notes off. All cases must return a new list. stutter(1) returns a copy.
-                "UP", {list = list.stutter(1);},
-                "DOWN", {list = list.reverse;},
-                // Mirror1 will return empty list if only 1 item
-                "UPDOWN", {if(list.size>1, {list = list.mirror1;}, {list = list.stutter(1)});},
-                "DOWNUP", {if(list.size>1, {list = list.reverse.mirror1;}, {list = list.stutter(1)});}
-            );
-            arppat.source = Pseq(list,inf);
         };
     };
     // Default Mode: polyphonic (no arp)
@@ -393,8 +418,23 @@ make_gui = {
         ))
         .add(\arp_polarity -> make_dict.value(
             element: PopUpMenu.new
-            .items_(["UP","UPDOWN","DOWN","DOWNUP"])
-            .action_({|p| ~polarity=p.item;}),
+            .items_(["UP","UPDOWN","DOWN","DOWNUP","REPEAT"])
+            .action_({|p|
+                if(~polarity=="REPEAT",{
+                    ~polarity = p.item;
+                    ~mode_switch.value;
+                    ~mode_arp.value;
+                },{
+                    if(p.item=="REPEAT" && ~on_arp==1,{
+                        ~polarity = p.item;
+                        ~mode_switch.value;
+                        ~mode_arp.value;
+                    },{
+                        ~polarity = p.item;
+                        // Arp was off, do not turn on
+                    });
+                });
+            }),
             default_p: "UP",
             p_to_v:{|p| ~elements[\arp_polarity][\element].items.detectIndex({|i| i==p})},
             v_to_p:{|v| ~elements[\arp_polarity][\element].items[v]}
