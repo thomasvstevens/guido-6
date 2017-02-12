@@ -110,7 +110,8 @@ make_synthdefs = {
         Out.kr(out,env * lfo)
     }).add;
     // MIXER (HFP, CHORUS, AMP, LIMITER)
-    SynthDef.new(\mixer,{|out,in,amp,chorus_level=0,chorus_rate=1,chorus_depth=0,freq_hpf=4|
+    SynthDef.new(\mixer,{|out,in,preamp,amp,
+             chorus_level=0,chorus_rate=1,chorus_depth=0,freq_hpf=4|
         var sig;
         // Apply Chorus before HPF
         sig = In.ar(in,2);
@@ -118,9 +119,13 @@ make_synthdefs = {
             AllpassL.ar(sig,0.05,LFTri.kr(chorus_rate.linexp(0,1,1/8,8),0,0.01*chorus_depth,0.03))!2]);
         // Lag the cutoff frequency to avoid clicks
         sig = HPF.ar(sig, Lag.kr(freq_hpf,0.25));
-        // Use a limiter to avoid exceeding audio range (esp. during self-oscillation).
-        // Hard limiter (clipping). Safeguard after Limiter.
-        Out.ar(out,Limiter.ar(amp!2 * sig,0.95,0.01).clip2(1));
+        // 3 stage amplitude control:
+        // 1. Preamp (gain) into softclip. Linear range [-0.5,0.5]. 95% clipped at +/- 5.
+        sig = (preamp!2 * sig).softclip * 2;
+        // 2. Use a limiter to avoid exceeding audio range (esp. during self-oscillation).
+        sig = Limiter.ar(amp!2 * sig,0.95,0.01);
+        // 3. Hard limiter (clipping). Safeguard after Limiter.
+        Out.ar(out,sig.clip2(1));
     }).add;
 };
 
@@ -137,7 +142,7 @@ make_synths = {
     ~bus_pwm = Bus.control;
     ~bus_pwm_manual = Bus.control.value_(0);
     ~bus_zero = Bus.control.value_(0);
-    ~mixer = Synth.new(\mixer, [\out,~bus_out,\in,~bus_dco,\amp,0.5,\freq_hpf,4]);
+    ~mixer = Synth.new(\mixer, [\out,~bus_out,\in,~bus_dco,\preamp,0.25,\amp,0.5]);
     // Dynamic Polyphony: limit number of total running synths. This is the 6 in Juno-6?
     ~nkeys = 6;
     ~notes = Array.fill(~nkeys,{|i| Synth.new(\dco,
@@ -404,10 +409,10 @@ make_gui = {
             element: make_onoff.value
             .action_({|b|
                 ~mode_switch.value;
+                ~elements[\hold_button][\element].value_(0);
                 if(b.value==0,{
                     ~mode_switch.value;
                     ~on_arp = 0;
-                    ~elements[\hold_button][\element].value_(0);
                     if(~on_mono==1,{~mode_mono.value},{~mode_poly.value});
                 },{
                     ~mode_arp.value;
@@ -703,11 +708,20 @@ make_gui = {
             p_to_v: {|p| ~elements[\voices][\element].states.detectIndex({|i| i[0]==p})},
             v_to_p: {|v| ~elements[\voices][\element].states[v][0]}
         ))
+        .add(\gain -> make_dict.value(
+            element: Knob.new
+            .action_({ |k| ~mixer.set(\preamp,
+                ~elements[\gain][\v_to_p].value(k.value)); })
+            .maxWidth_(button_dim*2),
+            default_p: 0.5,
+            p_to_v: {|p| p.explin(0.1,1000,0,1)},
+            v_to_p: {|v| v.linexp(0,1,0.1,1000)}
+        ))
         .add(\volume -> make_dict.value(
             element: Knob.new
             .action_({ |k| ~mixer.set(\amp,
                 ~elements[\volume][\v_to_p].value(k.value)); })
-            .maxWidth_(button_dim*3),
+            .maxWidth_(button_dim*2),
             default_p: 1,
             p_to_v: {|p| p.explin(0.01,100,0,1)},
             v_to_p: {|v| v.linexp(0,1,0.01,100)}
@@ -933,11 +947,12 @@ make_gui = {
             [nil,make_txt.value.string_("LFO TRIG"), ~elements[\lfo_trig_button][\element]],
             [nil,make_txt.value.string_("OCTAVE"), ~elements[\octave][\element]],
             [nil,make_txt.value.string_("VOICES"), ~elements[\voices][\element]],
+            [nil,make_txt.value.string_("GAIN"), ~elements[\gain][\element]],
             [nil,make_txt.value.string_("VOLUME"), ~elements[\volume][\element]],
         );
         // (add headers)
         grid_control.addSpanning(make_header.value.string_("BEND"),0,0,1,2);
-        grid_control.addSpanning(make_header.value.string_(""),0,2,1,4);
+        grid_control.addSpanning(make_header.value.string_(""),0,2,1,5);
         //////////////////
         // LAYOUT: MEMORY
         //////////////////
